@@ -2,4 +2,4 @@
 
 This repository contains the code used for the paper "Beam-Beam Backgrounds for The Cool Copper Collider".
 
-![Simulation Flowchart](Simulation_flowchart.pdf)
+![Simulation Flowchart](Simulation_flowchart.png)
