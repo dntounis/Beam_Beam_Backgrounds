@@ -20,4 +20,10 @@ The background-production pipeline illustrated in `Simulation_flowchart.png` / `
 - `occupancy/` - `dd4hep_hit_analysis_framework`, a modular package for decoding SiD cell IDs, mapping geometry, and computing hit occupancies. Provides reusable detector configuration classes, segmentation helpers, and command-line scripts/notebooks for layer-by-layer occupancy and time-bucket studies.
 - `Simulation_flowchart.png` - Visual summary of the full simulation and analysis pipeline referenced above.
 
+## Dependencies and licenses
+
+- GuineaPig: https://gitlab.cern.ch/clic-software/guinea-pig - Released under the upstream license; review and comply with their terms.
+- Whizard and Circe2: https://whizard.hepforge.org - Distributed under their respective open-source licenses as described by the project.
+- Key4HEP: https://github.com/key4hep - Bundles multiple tools; follow the licenses referenced in the Key4HEP documentation and component repositories.
+
 Each subtree retains its original README with site-specific setup notes, so consult those documents before launching large-scale production or modifying batch payloads.
