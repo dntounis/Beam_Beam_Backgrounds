@@ -1,0 +1,95 @@
+$ACCELERATOR:: C3_250_PS1
+{energy=125.0;particles=0.624;charge_sign=-1;
+beta_x=12.0;beta_y=0.12;
+emitt_x=0.9;emitt_y=0.02;
+sigma_z=100.0;
+scale_step=1.0;
+polar_z.1=-0.8;polar_z.2=0;
+espread=0.0034;which_espread=3; dist_z=0;
+f_rep=120;n_b=133;
+offset_y=0.;offset_x=0;
+waist_y=0;}
+
+$ACCELERATOR:: C3_250_PS2
+{energy=125.0;particles=0.624;charge_sign=-1;
+beta_x=12.0;beta_y=0.12;
+emitt_x=1.0;emitt_y=0.012;
+sigma_z=100.0;
+scale_step=1.0;
+polar_z.1=-0.8;polar_z.2=0;
+espread=0.0034;which_espread=3; dist_z=0;
+f_rep=120;n_b=133;
+offset_y=0.;offset_x=0;
+waist_y=80.0;}
+
+
+$ACCELERATOR:: C3_550_PS1
+{energy=275.0;particles=0.624;charge_sign=-1;
+beta_x=12.0;beta_y=0.12;
+emitt_x=0.9;emitt_y=0.02;
+sigma_z=100.0;
+scale_step=1.0;
+polar_z.1=-0.8;polar_z.2=0;
+espread=0.0034;which_espread=3; dist_z=0;
+f_rep=120;n_b=133;
+offset_y=0.;offset_x=0;
+waist_y=0;}
+
+$ACCELERATOR:: C3_550_PS2
+{energy=275.0;particles=0.624;charge_sign=-1;
+beta_x=12.0;beta_y=0.12;
+emitt_x=1.0;emitt_y=0.012;
+sigma_z=100.0;
+scale_step=1.0;
+polar_z.1=-0.8;polar_z.2=0;
+espread=0.0034;which_espread=3; dist_z=0;
+f_rep=120;n_b=133;
+offset_y=0.;offset_x=0;
+waist_y=80.0;}
+
+$PARAMETERS:: Jim_pars_Aug2023
+{n_z=25; n_t=6; n_m=100000; cut_z=3.5*sigma_z.1; n_x=512; n_y=512;
+cut_x=20*sigma_x.1; cut_y=20*sigma_y.1; pair_q2=1;
+beam_size=1; grids=7; store_beam=1; do_pairs=1; track_pairs=1;
+store_pairs=1; do_photons=1; store_photons=1; do_hadrons=1;
+do_jets=1; do_coherent=1; electron_ratio=1; photon_ratio=1;
+do_eloss=1; do_espread=1; rndm_seed=107626; rndm_load=0; rndm_save=1;
+do_lumi=1;
+automatic_grid_sizing=0;bmt_precession=1;pair_ecut=0.;
+}
+
+$PARAMETERS:: Jim_pars_July2024
+{n_z=25; n_t=6; n_m=100000; cut_z=3.5*sigma_z.1; n_x=512; n_y=512;
+cut_x=20*sigma_x.1; cut_y=20*sigma_y.1; 
+beam_size=1; grids=7; store_beam=1;
+do_pairs=1; track_pairs=1; store_pairs=1; pair_q2=1;
+do_muons=1; track_muons=1; store_muons=1; muon_ecut=1.06;
+do_coherent=1; do_trident=1; do_compt=1;
+do_photons=1; store_photons=1; 
+do_hadrons=3; store_hadrons=1;
+do_jets=1; store_jets=1;
+do_coherent=1; 
+electron_ratio=1; photon_ratio=1;
+do_eloss=1; do_espread=1; 
+rndm_seed=107626; rndm_load=0; rndm_save=1;
+do_lumi=7;
+automatic_grid_sizing=0;bmt_precession=1;pair_ecut=0.;
+}
+
+$PARAMETERS:: Jim_pars_Oct2024
+{n_z=25; n_t=6; n_m=100000; cut_z=3.5*sigma_z.1; n_x=512; n_y=512;
+cut_x=20*sigma_x.1; cut_y=20*sigma_y.1;
+beam_size=1; grids=7; store_beam=1;
+do_pairs=1; track_pairs=1; store_pairs=1; pair_q2=1;
+do_muons=1; track_muons=1; store_muons=1; muon_ecut=1.06;
+do_coherent=1; do_trident=1; do_compt=0;
+do_photons=1; store_photons=1;
+do_hadrons=3; store_hadrons=1;
+do_jets=1; store_jets=1;
+do_coherent=1;
+electron_ratio=1; photon_ratio=1;
+do_eloss=1; do_espread=1;
+rndm_seed=107626; rndm_load=0; rndm_save=1;
+do_lumi=7;
+automatic_grid_sizing=0;bmt_precession=1;pair_ecut=0.;
+}
