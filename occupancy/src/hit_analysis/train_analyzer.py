@@ -8,7 +8,7 @@ import traceback
 import re
 from collections import Counter
 from matplotlib.colors import LogNorm
-from typing import List
+from typing import Dict, List
 
 # Import parallel I/O utilities
 from src.utils.parallel_io import open_files_parallel
@@ -20,8 +20,14 @@ from src.utils.histogram_utils import (
     compute_rphi_area_map,
     compute_rz_area_map,
     extract_layer_geometry,
+    filter_hits_to_geometry,
 )
-from src.hit_analysis.plotting import _configure_log_yticks, _get_detector_display_name
+from src.utils.detector_area_helper import compute_detector_areas
+from src.hit_analysis.plotting import (
+    _configure_log_yticks,
+    _configure_polar_axis,
+    _get_detector_display_name,
+)
 
 
 def _sanitize_for_filename(value: str) -> str:
@@ -99,14 +105,30 @@ def average_train_results(train_results):
         for layer in all_layers:
             layer_stats = {}
             
-            # Get all the stats we need to average
-            stats_to_average = ['occupancy', 'mean_hits', 'cells_hit', 'total_hits', 'cells_above_threshold']
+            # Stats to average across trains. Include side-separated metrics when present.
+            stats_to_average = [
+                'occupancy',
+                'mean_hits',
+                'cells_hit',
+                'total_hits',
+                'cells_above_threshold',
+                'occupancy_plus_z',
+                'occupancy_minus_z',
+                'cells_above_threshold_plus_z',
+                'cells_above_threshold_minus_z',
+                'total_hits_plus_z',
+                'total_hits_minus_z',
+            ]
             
             for stat in stats_to_average:
                 values = []
                 for train in train_results:
-                    if layer in train['threshold_stats'][threshold]['per_layer']:
-                        values.append(train['threshold_stats'][threshold]['per_layer'][layer].get(stat, 0))
+                    layer_dict = train['threshold_stats'][threshold]['per_layer'].get(layer)
+                    if layer_dict is None:
+                        continue
+                    value = layer_dict.get(stat)
+                    if value is not None:
+                        values.append(value)
                 
                 if values:
                     # Calculate mean
@@ -121,12 +143,16 @@ def average_train_results(train_results):
                     else:
                         layer_stats[f'{stat}_std_dev'] = 0
                         layer_stats[f'{stat}_error'] = 0
+                elif stat in ['occupancy_plus_z', 'occupancy_minus_z',
+                              'cells_above_threshold_plus_z', 'cells_above_threshold_minus_z',
+                              'total_hits_plus_z', 'total_hits_minus_z']:
+                    # Skip adding side-specific stats when absent
+                    continue
                 else:
                     layer_stats[stat] = 0
                     layer_stats[f'{stat}_std_dev'] = 0
                     layer_stats[f'{stat}_error'] = 0
 
-            
             new_per_layer[layer] = layer_stats
         
         # Replace the per_layer dict with our averaged version
@@ -159,7 +185,8 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
                                      occupancy_ylim_map=None,
                                      occupancy_scaling_map=None,
                                      train_batch_size=None,
-                                     max_train_workers=None):
+                                     max_train_workers=None,
+                                     geometry_filter_tolerances=None):
     """
     Analyze detectors with train-based averaging.
     
@@ -197,6 +224,10 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
         Number of trains to process per parallel batch (limits open files)
     max_train_workers : int, optional
         Override the worker count passed to process_trains_parallel
+    geometry_filter_tolerances : dict, optional
+        Mapping of detector name -> tolerance (mm) used when rejecting
+        out-of-geometry hits in R-phi/R-z/timing plots. Use key 'default'
+        for the fallback value when no specific detector entry is provided.
     """
     from src.geometry_parsing.k4geo_parsers import parse_detector_constants
     from src.geometry_parsing.geometry_info import get_geometry_info
@@ -213,17 +244,41 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
     # Prepare summary accumulation
     summary_rows = []
 
+    # Pre-compute sensitive areas for detectors (if possible)
+    detector_areas: Dict[str, Dict[str, float]] = {}
+    area_inputs = {}
+    if detectors_to_analyze:
+        for det_name, xml_path in detectors_to_analyze:
+            if xml_path:
+                area_inputs[det_name] = xml_path
+    if main_xml and area_inputs:
+        try:
+            detector_areas = compute_detector_areas(main_xml, area_inputs)
+        except Exception as exc:
+            print(f"Warning: Failed to compute detector areas: {exc}")
+            detector_areas = {}
+
     # Analyze each detector
+    tolerance_map = geometry_filter_tolerances or {}
+    default_tolerance = tolerance_map.get('default', 1.0)
+
     for detector_name, xml_file in detectors_to_analyze:
         print(f"\nAnalyzing {detector_name} with train averaging...")
         scale_factor = 1.0
         if occupancy_scaling_map:
             scale_factor = occupancy_scaling_map.get(detector_name, 1.0)
 
+        geom_tolerance = tolerance_map.get(detector_name, default_tolerance)
+
         try:
             detector_config = DETECTOR_CONFIGS[detector_name]
             constants = parse_detector_constants(main_xml, detector_name)
             geometry_info = get_geometry_info(xml_file, detector_config, constants=constants)
+
+            area_info = detector_areas.get(detector_name)
+            if area_info:
+                geometry_info['total_sensitive_area_mm2'] = area_info.get('area_mm2')
+                geometry_info['total_sensitive_area_cm2'] = area_info.get('area_cm2')
             
             # Print geometry info
             print(f"\nGeometry info for {detector_name}:")
@@ -295,11 +350,22 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
                         stats, geometry_info, output_prefix=prefix, nlayer_batch=nlayer_batch,
                         occupancy_ylim=ylim,
                         scenario_label=scenario_label, detector_version=detector_version, background_label=background_label,
-                        occupancy_scale=scale_factor
+                        occupancy_scale=scale_factor,
+                        geometry_filter_tolerance=geom_tolerance
                     )
+                    # Generate verification plots for endcap/forward detectors showing +z/-z separately
+                    if detector_config.detector_type.lower() in ['endcap', 'forward']:
+                        plot_train_averaged_occupancy_analysis_plus_minus_z(
+                            stats, geometry_info, output_prefix=prefix, nlayer_batch=nlayer_batch,
+                            occupancy_ylim=ylim,
+                            scenario_label=scenario_label, detector_version=detector_version, background_label=background_label,
+                            occupancy_scale=scale_factor,
+                            geometry_filter_tolerance=geom_tolerance
+                        )
                     plot_train_averaged_timing_analysis(
                         stats, geometry_info, output_prefix=prefix,
-                        scenario_label=scenario_label, detector_version=detector_version, background_label=background_label
+                        scenario_label=scenario_label, detector_version=detector_version, background_label=background_label,
+                        geometry_filter_tolerance=geom_tolerance
                     )
 
                     # Add summary row for this mode
@@ -309,7 +375,9 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
                             'detector': detector_name,
                             'mode': mode_label,
                             'total_hits': summary['total_hits'],
-                            'total_cells': summary['total_cells'],
+                            'total_cells': int(summary['total_cells']),
+                            'effective_total_cells': int(summary.get('effective_total_cells', summary['total_cells'])),
+                            'area_cm2': geometry_info.get('total_sensitive_area_cm2'),
                             'mean_occupancy': summary['mean_occupancy'],
                             'scaled_mean_occupancy': summary['mean_occupancy'] * scale_factor
                         })
@@ -329,14 +397,29 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
                     scenario_label=scenario_label,
                     detector_version=detector_version,
                     background_label='IPC',
-                    occupancy_scale=scale_factor
+                    occupancy_scale=scale_factor,
+                    geometry_filter_tolerance=geom_tolerance
                 )
+                # Generate verification plots for endcap/forward detectors showing +z/-z separately
+                if detector_config.detector_type.lower() in ['endcap', 'forward']:
+                    plot_train_averaged_occupancy_analysis_plus_minus_z(
+                        stats, geometry_info, 
+                        output_prefix=f"{detector_name}_train{bunches_per_train}",
+                        nlayer_batch=nlayer_batch,
+                        occupancy_ylim=ylim,
+                        scenario_label=scenario_label,
+                        detector_version=detector_version,
+                        background_label='IPC',
+                        occupancy_scale=scale_factor,
+                        geometry_filter_tolerance=geom_tolerance
+                    )
                 plot_train_averaged_timing_analysis(
                     stats, geometry_info, 
                     output_prefix=f"{detector_name}_train{bunches_per_train}",
                     scenario_label=scenario_label,
                     detector_version=detector_version,
-                    background_label='IPC'
+                    background_label='IPC',
+                    geometry_filter_tolerance=geom_tolerance
                 )
 
                 # Add summary row for single-mode case
@@ -346,7 +429,9 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
                         'detector': detector_name,
                         'mode': 'IPC',
                         'total_hits': summary['total_hits'],
-                        'total_cells': summary['total_cells'],
+                        'total_cells': int(summary['total_cells']),
+                        'effective_total_cells': int(summary.get('effective_total_cells', summary['total_cells'])),
+                        'area_cm2': geometry_info.get('total_sensitive_area_cm2'),
                         'mean_occupancy': summary['mean_occupancy'],
                         'scaled_mean_occupancy': summary['mean_occupancy'] * scale_factor
                     })
@@ -374,8 +459,8 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
         try:
             header = (
                 f"{'Detector':<18} {'Mode':<6} {'Total Hits/train':>18} "
-                f"{'Total Cells':>14} {'Mean Occ.':>12} "
-                f"{'Mean Occ. (w/ safety factor,cluster size)':>41}"
+                f"{'Total Cells':>14} {'Eff. Cells':>14} {'Area [cm^2]':>14} "
+                f"{'Mean Occ.':>12} {'Mean Occ. (w/ safety factor,cluster size)':>41}"
             )
             print("\nSummary per subdetector (per train):")
             print(header)
@@ -384,10 +469,13 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
                 det = row['detector']
                 mode = row['mode']
                 th = row['total_hits']
-                tc = row['total_cells']
+                tc = int(row['total_cells'])
+                etc = int(row.get('effective_total_cells', tc))
+                area_cm2 = row.get('area_cm2')
+                area_str = f"{area_cm2:14.2f}" if isinstance(area_cm2, (int, float)) else f"{'n/a':>14}"
                 mo = row['mean_occupancy']
                 smo = row.get('scaled_mean_occupancy', mo)
-                print(f"{det:<18} {mode:<6} {th:18.3f} {tc:14d} {mo:12.3e} {smo:41.3e}")
+                print(f"{det:<18} {mode:<6} {th:18.3f} {tc:14d} {etc:14d} {area_str} {mo:12.3e} {smo:41.3e}")
         except Exception:
             pass
 
@@ -400,7 +488,9 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
 
 def plot_train_averaged_occupancy_analysis(stats, geometry_info, output_prefix=None, nlayer_batch=1,
                                            scenario_label=None, detector_version=None, background_label='IPC',
-                                           occupancy_ylim=None, occupancy_scale=1.0):
+                                           occupancy_ylim=None, occupancy_scale=1.0,
+                                           geometry_filter_tolerance=1.0,
+                                           interactive_plots=False):
     """
     Create detailed visualizations of the train-averaged occupancy analysis
     
@@ -412,6 +502,9 @@ def plot_train_averaged_occupancy_analysis(stats, geometry_info, output_prefix=N
         Geometry information
     output_prefix : str, optional
         If provided, save plots with this prefix
+    geometry_filter_tolerance : float, optional
+        Maximum distance (mm) a hit may lie outside the parsed geometry before
+        being filtered from the visualizations.
     """
     # Create figure with multiple subplots
     fig = plt.figure(figsize=(15, 10))
@@ -533,16 +626,35 @@ def plot_train_averaged_occupancy_analysis(stats, geometry_info, output_prefix=N
             pass
     ax1.legend()
     
+    layer_metadata = extract_layer_geometry(geometry_info)
+
     # 2. R-Phi hit distribution
     ax2 = fig.add_subplot(gs[0, 1], projection='polar')
     # Convert awkward arrays to numpy arrays
     phi_vals = ak.to_numpy(stats['positions']['phi'])
     r_vals = ak.to_numpy(stats['positions']['r'])
+    z_vals = ak.to_numpy(stats['positions']['z'])
+
+    # Debug: inspect surviving hits before geometry masking
+    try:
+        debug_count = len(r_vals)
+        geom_mask_preview = filter_hits_to_geometry(r_vals, z_vals, layer_metadata,
+                                                    tolerance=geometry_filter_tolerance)
+        debug_filtered = int(np.count_nonzero(geom_mask_preview)) if hasattr(np, 'count_nonzero') else int(sum(geom_mask_preview))
+        print("JIM DEBUG [geom-filter]", detector_label,
+              "hits before mask:", debug_count,
+              "after mask:", debug_filtered)
+    except Exception:
+        pass
+
+    geom_mask = filter_hits_to_geometry(r_vals, z_vals, layer_metadata,
+                                        tolerance=geometry_filter_tolerance)
+    phi_filtered = phi_vals[geom_mask] if geom_mask.size else phi_vals
+    r_filtered = r_vals[geom_mask] if geom_mask.size else r_vals
 
     # Create the edges first
-    hist, xedges, yedges = np.histogram2d(phi_vals, r_vals, bins=[51, 21])
+    hist, xedges, yedges = np.histogram2d(phi_filtered, r_filtered, bins=[51, 21])
 
-    layer_metadata = extract_layer_geometry(geometry_info)
     area_map = compute_rphi_area_map(layer_metadata, xedges, yedges)
     with np.errstate(invalid='ignore', divide='ignore'):
         hist_normalized = np.divide(hist, area_map, where=area_map > 0)
@@ -561,18 +673,18 @@ def plot_train_averaged_occupancy_analysis(stats, geometry_info, output_prefix=N
                              edgecolors='none')
     # Set background to white so masked regions show white
     ax2.set_facecolor('white')
-    ax2.set_ylabel('R [mm]',fontsize=18)
-    ax2.set_xlabel('Phi [rad]',fontsize=18)
+    ax2.set_ylabel('R [mm]', fontsize=18)
+    ax2.set_xlabel('Phi [rad]', fontsize=18)
+    _configure_polar_axis(ax2, r_filtered)
     #ax2.set_title('Hit Distribution (R-Phi)',fontsize=20)
     if pcm is not None:
         plt.colorbar(pcm, ax=ax2, label='Hits/mm²')
 
     # 3. R-Z hit distribution
     ax3 = fig.add_subplot(gs[1, :])
-    # Convert awkward arrays to numpy arrays
-    z_vals = ak.to_numpy(stats['positions']['z'])
-    r_vals = ak.to_numpy(stats['positions']['r'])
-    hist, xedges, yedges = np.histogram2d(z_vals, r_vals, bins=[100, 50])
+    z_filtered = z_vals[geom_mask] if geom_mask.size else z_vals
+    r_filtered_for_rz = r_filtered if geom_mask.size else r_vals
+    hist, xedges, yedges = np.histogram2d(z_filtered, r_filtered_for_rz, bins=[100, 50])
     
     area_map_rz = compute_rz_area_map(layer_metadata, xedges, yedges)
     with np.errstate(invalid='ignore', divide='ignore'):
@@ -647,7 +759,289 @@ def plot_train_averaged_occupancy_analysis(stats, geometry_info, output_prefix=N
         fig_occ.savefig(f'{base_path}_vs_buffer_only.png', dpi=300)
         fig_occ.savefig(f'{base_path}_vs_buffer_only.pdf')
     
-    plt.show()
+    if interactive_plots:
+        plt.show()
+    plt.close(fig)
+    plt.close(fig_occ)
+
+
+def plot_train_averaged_occupancy_analysis_plus_minus_z(stats, geometry_info, output_prefix=None, nlayer_batch=1,
+                                                        scenario_label=None, detector_version=None, background_label='IPC',
+                                                        occupancy_ylim=None, occupancy_scale=1.0,
+                                                        geometry_filter_tolerance=1.0,
+                                                        interactive_plots=False):
+    """
+    Create verification plots showing occupancy separately for +z and -z sides.
+    
+    This function generates plots with suffix '_VERIFY_plus_minus_z' that show
+    occupancy curves for +z and -z sides separately for each layer, allowing
+    verification that the two sides are similar (as expected for symmetric detectors).
+    
+    Parameters:
+    -----------
+    stats : dict
+        Statistics from average_train_results (must include per-side occupancy fields)
+    geometry_info : dict
+        Geometry information
+    output_prefix : str, optional
+        If provided, save plots with this prefix
+    geometry_filter_tolerance : float, optional
+        Maximum distance (mm) a hit may lie outside the parsed geometry before
+        being filtered from the visualizations.
+    """
+    # Create figure with multiple subplots
+    fig = plt.figure(figsize=(15, 10))
+    plt.style.use(hep.style.CMS)
+
+    # Get train info
+    bunches_per_train = stats.get('train_info', {}).get('bunches_per_train', 0)
+    num_trains = stats.get('train_info', {}).get('num_trains', 0)
+    
+    # Retrieve assumed time cut for occupancy calculation
+    time_cut = stats['time_cut']
+    print(f"Time cut: {time_cut}")
+
+    # Left/right titles matching requested style
+    left_title = None
+    if scenario_label is not None:
+        left_title = f"{scenario_label} ({bunches_per_train} bunches/train)"
+    else:
+        left_title = f"({bunches_per_train} bunches/train)"
+    detector_label = _get_detector_display_name(geometry_info["detector_name"])
+    right_title = f"{detector_version or 'SiD_o2_v04'} - {detector_label} - {background_label}"
+    time_note = (f" (t<{time_cut} ns)" if time_cut > 0 else "")
+    fig.text(0.01, 0.98, left_title + time_note + " - +z/-z Verification", ha='left', va='top', fontsize=16)
+    fig.text(0.99, 0.98, right_title, ha='right', va='top', fontsize=16)
+
+    gs = plt.GridSpec(2, 2)
+    
+    # 1. Occupancy vs threshold for each layer (showing +z and -z separately)
+    ax1 = fig.add_subplot(gs[0, 0])
+    scale = occupancy_scale if occupancy_scale is not None else 1.0
+    series_data = []
+    thresholds = sorted(stats['threshold_stats'].keys())
+
+    # Get all available layers and sort them
+    all_layers = sorted(geometry_info['layers'].keys())
+    
+    # Create layer batches
+    layer_batches = []
+    for i in range(0, len(all_layers), nlayer_batch):
+        batch = all_layers[i:i+nlayer_batch]
+        if batch:  # Skip empty batches
+            layer_batches.append(batch)
+    
+    # Plot occupancy for each batch, showing +z and -z separately
+    for i, batch in enumerate(layer_batches):
+        # Label for the batch
+        if len(batch) == 1:
+            batch_label_base = f'Layer {batch[0]}'
+        else:
+            batch_label_base = f'Layers {batch[0]}-{batch[-1]}'
+        
+        # Calculate occupancies for +z and -z sides separately
+        occupancies_plus_z = []
+        occupancies_minus_z = []
+        errors_plus_z = []
+        errors_minus_z = []
+        
+        for t in thresholds:
+            # Collect occupancies for all layers in batch
+            batch_occ_plus_z = []
+            batch_occ_minus_z = []
+            batch_err_plus_z = []
+            batch_err_minus_z = []
+            
+            for layer in batch:
+                layer_data = stats['threshold_stats'][t]['per_layer'].get(layer, {})
+                
+                # Get +z occupancy
+                if 'occupancy_plus_z' in layer_data:
+                    batch_occ_plus_z.append(layer_data['occupancy_plus_z'])
+                    # Use stored error if available
+                    if 'occupancy_error' in layer_data:
+                        batch_err_plus_z.append(layer_data['occupancy_error'])
+                    else:
+                        batch_err_plus_z.append(0)
+                
+                # Get -z occupancy
+                if 'occupancy_minus_z' in layer_data:
+                    batch_occ_minus_z.append(layer_data['occupancy_minus_z'])
+                    if 'occupancy_error' in layer_data:
+                        batch_err_minus_z.append(layer_data['occupancy_error'])
+                    else:
+                        batch_err_minus_z.append(0)
+            
+            # Average across layers in batch
+            if batch_occ_plus_z:
+                avg_occ_plus_z = sum(batch_occ_plus_z) / len(batch_occ_plus_z)
+                occupancies_plus_z.append(avg_occ_plus_z)
+                if batch_err_plus_z:
+                    combined_error = np.sqrt(sum(e**2 for e in batch_err_plus_z)) / len(batch_err_plus_z)
+                    errors_plus_z.append(combined_error)
+                else:
+                    errors_plus_z.append(0)
+            else:
+                occupancies_plus_z.append(0)
+                errors_plus_z.append(0)
+            
+            if batch_occ_minus_z:
+                avg_occ_minus_z = sum(batch_occ_minus_z) / len(batch_occ_minus_z)
+                occupancies_minus_z.append(avg_occ_minus_z)
+                if batch_err_minus_z:
+                    combined_error = np.sqrt(sum(e**2 for e in batch_err_minus_z)) / len(batch_err_minus_z)
+                    errors_minus_z.append(combined_error)
+                else:
+                    errors_minus_z.append(0)
+            else:
+                occupancies_minus_z.append(0)
+                errors_minus_z.append(0)
+        
+        # Plot +z side
+        scaled_plus_z = [val * scale for val in occupancies_plus_z]
+        scaled_err_plus_z = [err * scale for err in errors_plus_z]
+        ax1.errorbar(
+            thresholds,
+            scaled_plus_z,
+            yerr=scaled_err_plus_z,
+            fmt='o-',
+            label=f'{batch_label_base} (+z)',
+            capsize=3,
+            alpha=0.8
+        )
+        series_data.append((f'{batch_label_base} (+z)', scaled_plus_z, scaled_err_plus_z))
+        
+        # Plot -z side
+        scaled_minus_z = [val * scale for val in occupancies_minus_z]
+        scaled_err_minus_z = [err * scale for err in errors_minus_z]
+        ax1.errorbar(
+            thresholds,
+            scaled_minus_z,
+            yerr=scaled_err_minus_z,
+            fmt='s--',
+            label=f'{batch_label_base} (-z)',
+            capsize=3,
+            alpha=0.8
+        )
+        series_data.append((f'{batch_label_base} (-z)', scaled_minus_z, scaled_err_minus_z))
+    
+    ax1.set_xlabel('Buffer depth', fontsize=18)
+    ax1.set_ylabel('Layer occupancy', fontsize=18)
+    ax1.set_yscale('log')
+    _configure_log_yticks(ax1)
+    ax1.set_xticks(thresholds)
+    ax1.set_xticklabels([str(int(t)) for t in thresholds])
+    ax1.grid(True)
+    if occupancy_ylim is not None:
+        try:
+            ax1.set_ylim(occupancy_ylim)
+        except ValueError:
+            pass
+    ax1.legend()
+    
+    # 2. R-Phi hit distribution (same as main plot)
+    layer_metadata = extract_layer_geometry(geometry_info)
+    ax2 = fig.add_subplot(gs[0, 1], projection='polar')
+    phi_vals = ak.to_numpy(stats['positions']['phi'])
+    r_vals = ak.to_numpy(stats['positions']['r'])
+    z_vals = ak.to_numpy(stats['positions']['z'])
+    
+    geom_mask = filter_hits_to_geometry(r_vals, z_vals, layer_metadata,
+                                        tolerance=geometry_filter_tolerance)
+    phi_filtered = phi_vals[geom_mask] if geom_mask.size else phi_vals
+    r_filtered = r_vals[geom_mask] if geom_mask.size else r_vals
+
+    hist, xedges, yedges = np.histogram2d(phi_filtered, r_filtered, bins=[51, 21])
+    area_map = compute_rphi_area_map(layer_metadata, xedges, yedges)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        hist_normalized = np.divide(hist, area_map, where=area_map > 0)
+
+    masked = np.ma.masked_where(hist_normalized.T <= 0, hist_normalized.T)
+    cmap2 = plt.cm.get_cmap('viridis').copy()
+    cmap2.set_bad(color='white')
+    if masked.mask.all() if hasattr(masked.mask, 'all') else False:
+        ax2.text(0.5, 0.5, 'No data', transform=ax2.transAxes, ha='center', va='center')
+        pcm = None
+    else:
+        pcm = ax2.pcolormesh(xedges[:-1], yedges[:-1], masked,
+                             shading='auto', cmap=cmap2,
+                             edgecolors='none')
+    ax2.set_facecolor('white')
+    ax2.set_ylabel('R [mm]', fontsize=18)
+    ax2.set_xlabel('Phi [rad]', fontsize=18)
+    _configure_polar_axis(ax2, r_filtered)
+    if pcm is not None:
+        plt.colorbar(pcm, ax=ax2, label='Hits/mm²')
+
+    # 3. R-Z hit distribution (same as main plot)
+    ax3 = fig.add_subplot(gs[1, :])
+    z_filtered = z_vals[geom_mask] if geom_mask.size else z_vals
+    r_filtered_for_rz = r_filtered if geom_mask.size else r_vals
+    hist, xedges, yedges = np.histogram2d(z_filtered, r_filtered_for_rz, bins=[100, 50])
+    
+    area_map_rz = compute_rz_area_map(layer_metadata, xedges, yedges)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        hist_normalized = np.divide(hist, area_map_rz, where=area_map_rz > 0)
+
+    masked_rz = np.ma.masked_where(hist_normalized.T <= 0, hist_normalized.T)
+    cmap3 = plt.cm.get_cmap('viridis').copy()
+    cmap3.set_bad(color='white')
+    if masked_rz.mask.all() if hasattr(masked_rz.mask, 'all') else False:
+        ax3.text(0.5, 0.5, 'No data', transform=ax3.transAxes, ha='center', va='center')
+        pcm = None
+    else:
+        pcm = ax3.pcolormesh(xedges[:-1], yedges[:-1], masked_rz, shading='auto', cmap=cmap3)
+    ax3.set_xlabel('Z [mm]',fontsize=18)
+    ax3.set_ylabel('R [mm]',fontsize=18)
+    if pcm is not None:
+        plt.colorbar(pcm, ax=ax3, label='Hits/mm²')
+    
+    fig.tight_layout()
+
+    # Create occupancy-only figure
+    fig_occ, ax_occ = plt.subplots(figsize=(7, 5))
+    compact_left = left_title
+    if bunches_per_train:
+        compact_left = compact_left.replace(f" ({bunches_per_train} bunches/train)", "")
+        compact_left = compact_left.replace(f"({bunches_per_train} bunches/train)", "")
+    compact_left = compact_left.strip()
+    fig_occ.text(0.01, 0.98, compact_left + time_note + " - +z/-z Verification", ha='left', va='top', fontsize=16)
+    fig_occ.text(0.99, 0.98, right_title, ha='right', va='top', fontsize=16)
+
+    for label, vals, errs in series_data:
+        ax_occ.errorbar(
+            thresholds,
+            vals,
+            yerr=errs,
+            fmt='o-' if '(+z)' in label else 's--',
+            label=label,
+            capsize=3,
+            alpha=0.8
+        )
+    ax_occ.set_xlabel('Buffer depth', fontsize=18)
+    ax_occ.set_ylabel('Layer occupancy', fontsize=18)
+    ax_occ.set_yscale('log')
+    _configure_log_yticks(ax_occ)
+    ax_occ.set_xticks(thresholds)
+    ax_occ.set_xticklabels([str(int(t)) for t in thresholds])
+    ax_occ.grid(True)
+    ax_occ.legend()
+    fig_occ.tight_layout(rect=(0, 0, 1, 0.95))
+
+    if output_prefix:
+        if scenario_label:
+            scenario_token = _sanitize_for_filename(scenario_label)
+            base_path = f"{output_prefix}_{scenario_token}_VERIFY_plus_minus_z_occupancy"
+        else:
+            base_path = f"{output_prefix}_VERIFY_plus_minus_z_occupancy"
+
+        fig.savefig(f'{base_path}.png', dpi=300)
+        fig.savefig(f'{base_path}.pdf')
+        fig_occ.savefig(f'{base_path}_vs_buffer_only.png', dpi=300)
+        fig_occ.savefig(f'{base_path}_vs_buffer_only.pdf')
+    
+    if interactive_plots:
+        plt.show()
     plt.close(fig)
     plt.close(fig_occ)
 
@@ -777,7 +1171,8 @@ def plot_train_averaged_occupancy_analysis(stats, geometry_info, output_prefix=N
 
 
 def plot_train_averaged_timing_analysis(stats, geometry_info, output_prefix=None,
-                                        scenario_label=None, detector_version=None, background_label='IPC'):
+                                        scenario_label=None, detector_version=None, background_label='IPC',
+                                        geometry_filter_tolerance=1.0):
     """
     Create timing analysis visualizations with hit density (hits/mm²) for train-averaged results
     
@@ -789,6 +1184,9 @@ def plot_train_averaged_timing_analysis(stats, geometry_info, output_prefix=None
         Geometry information
     output_prefix : str, optional
         If provided, save plots with this prefix
+    geometry_filter_tolerance : float, optional
+        Maximum distance (mm) a hit may lie outside the parsed geometry before
+        being filtered from the visualizations.
     """
     # Create figure with multiple subplots
     fig = plt.figure(figsize=(15, 10))
@@ -822,10 +1220,28 @@ def plot_train_averaged_timing_analysis(stats, geometry_info, output_prefix=None
         z_vals = ak.to_numpy(stats['positions']['z'])
         phi_vals = ak.to_numpy(stats['positions']['phi'])
     else:
-        time_vals = stats['times']
-        r_vals = stats['positions']['r']
-        z_vals = stats['positions']['z']
-        phi_vals = stats['positions']['phi']
+        time_vals = np.asarray(stats['times'])
+        r_vals = np.asarray(stats['positions']['r'])
+        z_vals = np.asarray(stats['positions']['z'])
+        phi_vals = np.asarray(stats['positions']['phi'])
+
+    print("JIM DEBUG [timing-array]", detector_label,
+          "array type", type(stats['times']),
+          "size", time_vals.size)
+
+    layer_metadata = extract_layer_geometry(geometry_info)
+    geom_mask = filter_hits_to_geometry(r_vals, z_vals, layer_metadata,
+                                        tolerance=geometry_filter_tolerance)
+    if geom_mask.size:
+        time_vals = time_vals[geom_mask]
+        r_vals = r_vals[geom_mask]
+        z_vals = z_vals[geom_mask]
+        phi_vals = phi_vals[geom_mask]
+
+    if time_vals.size == 0:
+        print("JIM DEBUG [timing]", detector_label,
+              "no hits after thresholds – skipping timing plot")
+        return
 
     if len(time_vals) == 0:
         t_edges = np.linspace(0, 1, 100)
@@ -952,7 +1368,8 @@ def plot_train_averaged_timing_analysis(stats, geometry_info, output_prefix=None
                             cmap=cmap4,
                             norm=LogNorm(vmin=0.001))
     ax4.set_facecolor('white')
-    ax4.set_xlabel('Phi [rad]')
+    ax4.set_xlabel('Phi [rad]', labelpad=10)
+    ax4.tick_params(axis='x', pad=8)
     ax4.set_ylabel('Time [ns]')
     if pcm is not None:
         cbar = plt.colorbar(pcm, ax=ax4)

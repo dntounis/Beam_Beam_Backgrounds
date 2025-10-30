@@ -366,6 +366,42 @@ def get_pixel_id(hit_pos, decoded, config, geometry_info, effective_cell_size=No
     return (layer, decoded.get('module', 0))
 
 
+def _determine_side(decoded, hit_z):
+    """
+    Determine side (+z or -z) from cellID or hit position.
+    
+    Parameters:
+    -----------
+    decoded : dict
+        Decoded cellID information (must include 'side' field)
+    hit_z : float
+        Hit z-coordinate in mm
+        
+    Returns:
+    --------
+    int : 0 for +z side, 1 for -z side
+    """
+    side_field = decoded.get('side', None)
+    if side_field is not None:
+        try:
+            side_val = int(side_field)
+        except (TypeError, ValueError):
+            side_val = 0
+
+        if side_val < 0:
+            return 1
+
+        if side_val > 0:
+            # Positive side values typically map to +z but fall back to hit position if inconsistent
+            return 0 if hit_z >= 0 else 1
+
+        # side_val == 0: rely on hit position to distinguish mirrored disks
+        return 0 if hit_z >= 0 else 1
+
+    # Fallback to z-coordinate if side field missing entirely
+    return 0 if hit_z >= 0 else 1
+
+
 def get_tracker_pixel_id(hit_pos, decoded, config, layer_info, cell_size):
     """
     Get pixel ID for tracker detectors (barrel, endcap, forward)
@@ -385,7 +421,8 @@ def get_tracker_pixel_id(hit_pos, decoded, config, layer_info, cell_size):
         
     Returns:
     --------
-    tuple: (layer, module, pixel_x, pixel_y)
+    tuple: For barrel: (layer, module, pixel_t, pixel_z)
+           For endcap/forward: (layer, side, module, pixel_x, pixel_y)
     """
     # Extract basic info
     hit_x, hit_y, hit_z = hit_pos
@@ -428,16 +465,29 @@ def get_tracker_pixel_id(hit_pos, decoded, config, layer_info, cell_size):
         return (layer, module, pixel_t, pixel_z)
         
     elif config.detector_type == 'endcap':
-        # Find matching ring
+        # Determine side (+z or -z) for endcap detectors
+        side = _determine_side(decoded, hit_z)
+        
+        # Find matching ring - use actual hit_z instead of abs(hit_z)
         matching_ring = None
         for ring in layer_info['rings']:
-            if (ring['r_inner'] <= np.sqrt(hit_x**2 + hit_y**2) <= ring['r_outer'] and
-                ring['z_min'] <= abs(hit_z) <= ring['z_max']):
-                matching_ring = ring
-                break
+            r_hit = np.sqrt(hit_x**2 + hit_y**2)
+            # Check radial bounds
+            if not (ring['r_inner'] <= r_hit <= ring['r_outer']):
+                continue
+            # Check z bounds based on side
+            if side == 0:  # +z side
+                if ring['z_min'] <= hit_z <= ring['z_max']:
+                    matching_ring = ring
+                    break
+            else:  # -z side
+                # For -z side, check mirrored z bounds
+                if -ring['z_max'] <= hit_z <= -ring['z_min']:
+                    matching_ring = ring
+                    break
                 
         if matching_ring is None:
-            return (layer, module)
+            return (layer, side, module, 0, 0)
             
         # Get module position in ring
         phi = np.arctan2(hit_y, hit_x)
@@ -474,9 +524,12 @@ def get_tracker_pixel_id(hit_pos, decoded, config, layer_info, cell_size):
         pixel_x = max(0, min(pixel_x, max_pixels_x - 1))
         pixel_y = max(0, min(pixel_y, max_pixels_y - 1))
         
-        return (layer, module, pixel_x, pixel_y)
+        return (layer, side, module, pixel_x, pixel_y)
         
     elif config.detector_type == 'forward':
+        # Determine side (+z or -z) for forward detectors
+        side = _determine_side(decoded, hit_z)
+        
         # Forward tracker uses simpler cartesian segmentation
         module_width = layer_info.get('width', 100.0)  # Default if not specified
         module_length = layer_info.get('length', 100.0)
@@ -493,9 +546,9 @@ def get_tracker_pixel_id(hit_pos, decoded, config, layer_info, cell_size):
         pixel_x = max(0, min(pixel_x, max_pixels_x - 1))
         pixel_y = max(0, min(pixel_y, max_pixels_y - 1))
         
-        return (layer, module, pixel_x, pixel_y)
+        return (layer, side, module, pixel_x, pixel_y)
         
-    return (layer, module)  # Fallback
+    return (layer, module)  # Fallback (should not happen for proper detector types)
         
     
 def get_calo_muon_pixel_id(hit_pos, decoded, config, layer_info, cell_size):

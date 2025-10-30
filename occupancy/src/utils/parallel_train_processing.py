@@ -92,6 +92,12 @@ def process_single_train_worker(args: Tuple) -> Tuple[int, Optional[Dict], Optio
                 remove_zeros, time_cut, calo_hit_time_def, energy_thresholds,
                 use_vectorized=use_vectorized
             )
+            try:
+                ipc_time_len = len(ipc_stats.get('times', [])) if ipc_stats else -1
+                print("JIM DEBUG [train-worker]", detector_name, "train", train_idx+1,
+                      "times length:", ipc_time_len)
+            except Exception:
+                pass
 
             # Optionally build HPP event views and stats
             hpp_stats = None

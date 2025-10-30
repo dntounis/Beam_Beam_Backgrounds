@@ -90,6 +90,38 @@ def _build_structured_array(components: Dict[str, np.ndarray]) -> np.ndarray:
     return structured
 
 
+def _resolve_side_array(raw_side: Optional[np.ndarray], pos_z: np.ndarray) -> np.ndarray:
+    """
+    Map DD4hep side field values to 0 (+z) or 1 (-z).
+    In real DD4hep files: side=1 for +z, side=-1 for -z.
+    Falls back to the hit z-position when the side field is missing or ambiguous.
+    """
+    if raw_side is None:
+        return (pos_z < 0).astype(np.int32)
+
+    side_vals = np.asarray(raw_side, dtype=np.int32)
+    
+    # Initialize sides array based on z-position (fallback)
+    sides = (pos_z < 0).astype(np.int32)
+    
+    # Handle negative side values: side=-1 or side=-2 means -z
+    negative_mask = side_vals < 0
+    sides[negative_mask] = 1
+    
+    # Handle positive side values: side=1 means +z, but verify with z-position
+    positive_mask = side_vals > 0
+    if np.any(positive_mask):
+        # Positive side values typically map to +z, but verify consistency
+        sides[positive_mask] = np.where(pos_z[positive_mask] >= 0, 0, 1).astype(np.int32)
+    
+    # Handle zero side values: rely on hit position
+    zero_mask = side_vals == 0
+    if np.any(zero_mask):
+        sides[zero_mask] = (pos_z[zero_mask] < 0).astype(np.int32)
+    
+    return sides
+
+
 def _clip_indices(values: np.ndarray, max_count: float) -> np.ndarray:
     max_count = max(1, int(round(max_count)))
     return np.clip(values, 0, max_count - 1)
@@ -150,8 +182,9 @@ def _fill_tracker_forward(indices: np.ndarray, layer_info: Dict, cell_size: Dict
 
 
 def _fill_tracker_endcap(indices: np.ndarray, layer_info: Dict, cell_size: Dict,
-                          modules: np.ndarray, pos_x: np.ndarray, pos_y: np.ndarray,
-                          pos_z: np.ndarray, ix: np.ndarray, iy: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+                         modules: np.ndarray, pos_x: np.ndarray, pos_y: np.ndarray,
+                         pos_z: np.ndarray, ix: np.ndarray, iy: np.ndarray,
+                         side_values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     count = indices.size
     if count == 0:
         return np.zeros(0, dtype=bool), np.zeros(0, dtype=np.int32)
@@ -164,14 +197,40 @@ def _fill_tracker_endcap(indices: np.ndarray, layer_info: Dict, cell_size: Dict,
     hits_z = pos_z[indices]
     module_vals = modules[indices]
     r_hit = np.sqrt(hits_x ** 2 + hits_y ** 2)
-    abs_z = np.abs(hits_z)
 
     for ring_idx, ring in enumerate(rings):
         r_inner = ring.get('r_inner', ring.get('r_min', 0.0))
         r_outer = ring.get('r_outer', ring.get('r_max', 0.0))
         z_min = ring.get('z_min', layer_info.get('z_min', 0.0))
         z_max = ring.get('z_max', layer_info.get('z_max', 0.0))
-        ring_mask = (r_hit >= r_inner) & (r_hit <= r_outer) & (abs_z >= z_min) & (abs_z <= z_max)
+        
+        # Check radial bounds first
+        ring_mask = (r_hit >= r_inner) & (r_hit <= r_outer)
+        if not np.any(ring_mask):
+            continue
+        
+        # Check z bounds based on side: +z side (side=0) uses positive z, -z side (side=1) uses negative z
+        side_mask = side_values[indices]
+        plus_z_mask = (side_mask == 0) & ring_mask
+        minus_z_mask = (side_mask == 1) & ring_mask
+        
+        # For +z side: check if hit_z is within ring z bounds
+        plus_z_valid = np.zeros_like(ring_mask, dtype=bool)
+        if np.any(plus_z_mask):
+            plus_z_indices = np.where(plus_z_mask)[0]
+            plus_z_z_values = hits_z[plus_z_indices]
+            plus_z_valid[plus_z_indices] = (plus_z_z_values >= z_min) & (plus_z_z_values <= z_max)
+        
+        # For -z side: check if hit_z is within mirrored ring z bounds
+        minus_z_valid = np.zeros_like(ring_mask, dtype=bool)
+        if np.any(minus_z_mask):
+            minus_z_indices = np.where(minus_z_mask)[0]
+            minus_z_z_values = hits_z[minus_z_indices]
+            minus_z_valid[minus_z_indices] = (minus_z_z_values >= -z_max) & (minus_z_z_values <= -z_min)
+        
+        # Combine valid masks
+        ring_mask = plus_z_valid | minus_z_valid
+        
         if not np.any(ring_mask):
             continue
         valid[ring_mask] = True
@@ -233,6 +292,12 @@ def _compute_tracker_components(decoded: Dict[str, np.ndarray], positions: np.nd
     layer_map = geometry_info['layers'] if geometry_info and 'layers' in geometry_info else {}
     det_type = config.detector_type.lower()
 
+    if det_type in ('endcap', 'forward'):
+        raw_side = decoded.get('side')
+        side_values = _resolve_side_array(raw_side, pos_z)
+    else:
+        side_values = np.zeros(count, dtype=np.int32)
+
     for layer_id in np.unique(layers):
         layer_indices = np.where(layers == layer_id)[0]
         if layer_indices.size == 0:
@@ -248,7 +313,7 @@ def _compute_tracker_components(decoded: Dict[str, np.ndarray], positions: np.nd
             _fill_tracker_forward(layer_indices, layer_info, cell_size, pos_x, pos_y, ix, iy)
         elif det_type == 'endcap':
             layer_valid, ring_ids = _fill_tracker_endcap(
-                layer_indices, layer_info, cell_size, modules, pos_x, pos_y, pos_z, ix, iy
+                layer_indices, layer_info, cell_size, modules, pos_x, pos_y, pos_z, ix, iy, side_values
             )
             valid[layer_indices] = layer_valid
             rings[layer_indices] = ring_ids
@@ -262,6 +327,7 @@ def _compute_tracker_components(decoded: Dict[str, np.ndarray], positions: np.nd
         'module': modules,
         'ix': ix,
         'iy': iy,
+        'side': side_values,
     })
     return components, valid
 
@@ -357,6 +423,7 @@ def process_hits_vectorized(cellids: np.ndarray, x: np.ndarray, y: np.ndarray, z
 
     decoded = decode_cellids_vectorized(cellids, detector_name)
     det_class = config.detector_class.lower()
+    det_type = config.detector_type.lower()
 
     if det_class in ('vertex', 'tracker'):
         components, valid_mask = _compute_tracker_components(decoded, positions, config, geometry_info)
@@ -377,6 +444,11 @@ def process_hits_vectorized(cellids: np.ndarray, x: np.ndarray, y: np.ndarray, z
 
     unique_components, hit_counts = np.unique(components, return_counts=True)
     layers_for_keys = unique_components['layer'].astype(int)
+    component_names = unique_components.dtype.names or ()
+    side_arr = None
+    if 'side' in component_names:
+        side_arr = unique_components['side'].astype(int)
+    is_side_sensitive = det_type in ('endcap', 'forward') and side_arr is not None
     stats: Dict[int, Dict[str, object]] = {}
 
     for threshold in buffer_depths:
@@ -392,15 +464,54 @@ def process_hits_vectorized(cellids: np.ndarray, x: np.ndarray, y: np.ndarray, z
             max_hits = int(counts.max())
             mean_hits = float(counts.mean())
             total_cells = _lookup_total_cells(geometry_info, int(layer))
-            occupancy = (cells_above / total_cells) if total_cells > 0 else 0.0
-            layer_stats[int(layer)] = {
+
+            layer_entry: Dict[str, object] = {
                 'cells_hit': cells_hit,
                 'total_hits': total_hits,
                 'cells_above_threshold': cells_above,
                 'max_hits': max_hits,
                 'mean_hits': mean_hits,
-                'occupancy': occupancy,
             }
+
+            if total_cells > 0:
+                occupancy_total = cells_above / total_cells
+            else:
+                occupancy_total = 0.0
+
+            if is_side_sensitive:
+                layer_side = side_arr[layer_mask]
+                plus_mask = layer_side == 0
+                minus_mask = layer_side == 1
+
+                counts_plus = counts[plus_mask]
+                counts_minus = counts[minus_mask]
+
+                cells_above_plus = int(np.sum(counts_plus >= threshold)) if counts_plus.size else 0
+                cells_above_minus = int(np.sum(counts_minus >= threshold)) if counts_minus.size else 0
+                total_hits_plus = int(counts_plus.sum()) if counts_plus.size else 0
+                total_hits_minus = int(counts_minus.sum()) if counts_minus.size else 0
+
+                occupancy_plus = (cells_above_plus / total_cells) if total_cells > 0 else 0.0
+                occupancy_minus = (cells_above_minus / total_cells) if total_cells > 0 else 0.0
+
+                if counts_plus.size or counts_minus.size:
+                    occupancy_avg = (occupancy_plus + occupancy_minus) / 2.0
+                else:
+                    occupancy_avg = 0.0
+
+                layer_entry.update({
+                    'occupancy': occupancy_avg,
+                    'occupancy_plus_z': occupancy_plus,
+                    'occupancy_minus_z': occupancy_minus,
+                    'cells_above_threshold_plus_z': cells_above_plus,
+                    'cells_above_threshold_minus_z': cells_above_minus,
+                    'total_hits_plus_z': total_hits_plus,
+                    'total_hits_minus_z': total_hits_minus,
+                })
+            else:
+                layer_entry['occupancy'] = occupancy_total
+
+            layer_stats[int(layer)] = layer_entry
 
         overall_cells_hit = int(sum(v['cells_hit'] for v in layer_stats.values())) if layer_stats else 0
         overall_cells_above = int(sum(v['cells_above_threshold'] for v in layer_stats.values())) if layer_stats else 0

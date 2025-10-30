@@ -77,6 +77,103 @@ def extract_layer_geometry(geometry_info: Dict) -> List[Dict[str, float]]:
     return layers
 
 
+def filter_hits_to_geometry(
+    r_vals: np.ndarray,
+    z_vals: np.ndarray,
+    layers: List[Dict[str, float]],
+    tolerance: float = 1.0,
+) -> np.ndarray:
+    """Return a mask selecting hits that fall within known geometry envelopes.
+
+    Parameters
+    ----------
+    r_vals : np.ndarray
+        Radial positions (mm) of hits.
+    z_vals : np.ndarray
+        Longitudinal positions (mm) of hits.
+    layers : list of dict
+        Output from :func:`extract_layer_geometry` describing detector layers.
+    tolerance : float, optional
+        Symmetric cushion (mm) added to radial and |z| bounds to absorb
+        numerical tails and rounding.
+
+    Returns
+    -------
+    np.ndarray of bool
+        True for hits compatible with at least one geometry element.
+    """
+
+    if layers is None or len(layers) == 0:
+        # No geometry information – keep everything.
+        return np.ones_like(r_vals, dtype=bool)
+
+    r = np.asarray(r_vals, dtype=float)
+    z = np.asarray(z_vals, dtype=float)
+    abs_z = np.abs(z)
+    mask = np.zeros_like(r, dtype=bool)
+
+    tol = max(float(tolerance), 0.0)
+
+    for layer in layers:
+        layer_type = layer.get('type')
+
+        if layer_type == 'disk':
+            r_inner = layer.get('r_inner')
+            r_outer = layer.get('r_outer')
+            z_min = layer.get('z_min')
+            z_max = layer.get('z_max')
+
+            if r_inner is None or r_outer is None or z_min is None or z_max is None:
+                continue
+
+            r_lo = max(r_inner - tol, 0.0)
+            r_hi = r_outer + tol
+            z_lo = max(z_min - tol, 0.0)
+            z_hi = z_max + tol
+
+            layer_mask = (r >= r_lo) & (r <= r_hi) & (abs_z >= z_lo) & (abs_z <= z_hi)
+            mask |= layer_mask
+            continue
+
+        # Treat anything else as a cylindrical section by default.
+        r_inner = layer.get('r_inner')
+        r_outer = layer.get('r_outer')
+        radius = layer.get('radius')
+
+        if r_inner is None and radius is not None:
+            r_inner = radius
+        if r_outer is None and radius is not None:
+            r_outer = radius
+
+        if r_inner is None and r_outer is None:
+            # Cannot constrain radially; skip this layer.
+            continue
+
+        if r_outer is None:
+            r_outer = r_inner
+        if r_inner is None:
+            r_inner = r_outer
+
+        r_lo = max(min(r_inner, r_outer) - tol, 0.0)
+        r_hi = max(r_inner, r_outer) + tol
+
+        z_min = layer.get('z_min')
+        z_max = layer.get('z_max')
+
+        if z_min is not None and z_max is not None:
+            z_lo = max(min(z_min, z_max) - tol, 0.0)
+            z_hi = max(z_min, z_max) + tol
+            z_mask = (abs_z >= z_lo) & (abs_z <= z_hi)
+        else:
+            # Many geometries omit explicit z extents; default to keeping hits.
+            z_mask = np.ones_like(mask, dtype=bool)
+
+        layer_mask = (r >= r_lo) & (r <= r_hi) & z_mask
+        mask |= layer_mask
+
+    return mask
+
+
 def compute_rphi_area_map(layers: List[Dict], phi_edges: np.ndarray, r_edges: np.ndarray) -> np.ndarray:
     """Area (mm²) covered by each (phi, r) bin."""
 

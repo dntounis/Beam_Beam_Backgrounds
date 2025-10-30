@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Dict, List, Tuple
 
 import xml.etree.ElementTree as ET
@@ -322,7 +323,7 @@ def parse_calorimeter_geometry(detector, config, geometry_info, constants):
             total_cells = cells_per_layer * n_sensitive
             
             # Store layer info
-            geometry_info['layers'][layer_id] = {
+            layer_data = {
                 'repeat_group': layer_count,
                 'repeat_number': r,
                 'sensitive_slices': layer_info['sensitive_slices'],
@@ -330,6 +331,42 @@ def parse_calorimeter_geometry(detector, config, geometry_info, constants):
                 'total_cells': total_cells,
                 **{k:v for k,v in layer_info.items() if k not in ['repeat', 'sensitive_slices']}
             }
+            
+            # Add envelope bounds from detector-level or layer-level
+            if config.detector_type == 'barrel':
+                # Copy detector-level bounds to layer
+                if 'rmin' in geometry_info:
+                    layer_data['inner_r'] = geometry_info['rmin']
+                if 'rmax' in geometry_info:
+                    layer_data['outer_r'] = geometry_info['rmax']
+                if 'z_length' in geometry_info:
+                    layer_data['z_length'] = geometry_info['z_length']
+                # Also check layer_info for explicit bounds
+                if 'rmin' in layer_info:
+                    layer_data['inner_r'] = layer_info['rmin']
+                if 'rmax' in layer_info:
+                    layer_data['outer_r'] = layer_info['rmax']
+            else:
+                # Endcap detectors
+                if 'rmin' in geometry_info:
+                    layer_data['inner_r'] = geometry_info['rmin']
+                if 'rmax' in geometry_info:
+                    layer_data['outer_r'] = geometry_info['rmax']
+                if 'zmin' in geometry_info:
+                    layer_data['z_min'] = geometry_info['zmin']
+                if 'zmax' in geometry_info:
+                    layer_data['z_max'] = geometry_info['zmax']
+                # Also check layer_info
+                if 'rmin' in layer_info:
+                    layer_data['inner_r'] = layer_info['rmin']
+                if 'rmax' in layer_info:
+                    layer_data['outer_r'] = layer_info['rmax']
+                if 'zmin' in layer_info:
+                    layer_data['z_min'] = layer_info['zmin']
+                if 'zmax' in layer_info:
+                    layer_data['z_max'] = layer_info['zmax']
+            
+            geometry_info['layers'][layer_id] = layer_data
             
             # Add to total
             geometry_info['total_cells'] += total_cells
@@ -936,12 +973,12 @@ def evaluate_expression(expr_str, constants):
 
 def evaluate_math_expression(expr_str):
     """
-    Evaluate a mathematical expression string.
+    Evaluate a mathematical expression string with support for parentheses and operator precedence.
     
     Parameters:
     -----------
     expr_str : str
-        Expression to evaluate (e.g., "1.75 + 787.105")
+        Expression to evaluate (e.g., "(1.75 + 787.105) * 2")
         
     Returns:
     --------
@@ -951,40 +988,121 @@ def evaluate_math_expression(expr_str):
         return expr_str
         
     try:
-        # Remove parentheses if they wrap the entire expression
         expr = expr_str.strip()
+        
+        # Handle parentheses recursively
+        while '(' in expr:
+            # Find innermost parentheses
+            start = expr.rfind('(')
+            if start == -1:
+                break
+            end = expr.find(')', start)
+            if end == -1:
+                break
+            
+            # Evaluate inner expression
+            inner = expr[start+1:end]
+            inner_value = evaluate_math_expression(inner)
+            if inner_value is None:
+                return None
+            
+            # Replace parentheses group with evaluated value
+            expr = expr[:start] + str(inner_value) + expr[end+1:]
+        
+        # Remove outer parentheses if they wrap entire expression
+        expr = expr.strip()
         while expr.startswith('(') and expr.endswith(')'):
             expr = expr[1:-1].strip()
+        
+        # Evaluate operations with proper precedence
+        # First handle multiplication and division
+        while '*' in expr or '/' in expr:
+            # Find first * or / operation
+            mul_idx = expr.find('*') if '*' in expr else len(expr)
+            div_idx = expr.find('/') if '/' in expr else len(expr)
             
-        # Split on basic operations
-        if '+' in expr:
-            parts = expr.split('+')
-            return sum(float(p.strip()) for p in parts)
-        elif '-' in expr and not expr.startswith('-'):
-            parts = expr.split('-')
-            return float(parts[0]) - sum(float(p.strip()) for p in parts[1:])
-        elif '*' in expr:
-            parts = expr.split('*')
-            result = 1.0
-            for p in parts:
-                result *= float(p.strip())
-            return result
-        elif '/' in expr:
-            parts = expr.split('/')
-            return float(parts[0]) / float(parts[1])
+            if mul_idx < div_idx:
+                # Handle multiplication
+                left = expr[:mul_idx].strip()
+                right = expr[mul_idx+1:].strip()
+                # Find boundaries for left and right operands
+                left_start = 0
+                for i in range(mul_idx - 1, -1, -1):
+                    if expr[i] in '+-' and i > 0:
+                        left_start = i + 1
+                        break
+                right_end = len(expr)
+                for i in range(mul_idx + 1, len(expr)):
+                    if expr[i] in '+-*/':
+                        right_end = i
+                        break
+                
+                left_part = expr[left_start:mul_idx].strip()
+                right_part = expr[mul_idx+1:right_end].strip()
+                
+                left_val = float(left_part) if left_part else 1.0
+                right_val = float(right_part) if right_part else 1.0
+                result = left_val * right_val
+                
+                expr = expr[:left_start] + str(result) + expr[right_end:]
+            else:
+                # Handle division
+                left_start = 0
+                for i in range(div_idx - 1, -1, -1):
+                    if expr[i] in '+-' and i > 0:
+                        left_start = i + 1
+                        break
+                right_end = len(expr)
+                for i in range(div_idx + 1, len(expr)):
+                    if expr[i] in '+-*/':
+                        right_end = i
+                        break
+                
+                left_part = expr[left_start:div_idx].strip()
+                right_part = expr[div_idx+1:right_end].strip()
+                
+                left_val = float(left_part) if left_part else 1.0
+                right_val = float(right_part) if right_part else 1.0
+                if right_val == 0:
+                    return None
+                result = left_val / right_val
+                
+                expr = expr[:left_start] + str(result) + expr[right_end:]
+        
+        # Now handle addition and subtraction
+        if '+' in expr or (expr.count('-') > 0 and not expr.startswith('-')):
+            parts = []
+            current = ''
+            sign = 1
+            for char in expr:
+                if char == '+':
+                    if current:
+                        parts.append(sign * float(current.strip()))
+                    current = ''
+                    sign = 1
+                elif char == '-' and current:
+                    if current:
+                        parts.append(sign * float(current.strip()))
+                    current = ''
+                    sign = -1
+                else:
+                    current += char
+            if current:
+                parts.append(sign * float(current.strip()))
+            return sum(parts)
         else:
             return float(expr)
-    except:
+    except Exception as e:
         return None
 
 def parse_value(value_str, constants=None):
     """
-    Enhanced value parser that handles expressions and units.
+    Enhanced value parser that handles expressions and units with proper normalization.
     
     Parameters:
     -----------
     value_str : str
-        String containing value to parse
+        String containing value to parse (e.g., "SiTrackerBarrel_inner_rc - 6.2*mm")
     constants : dict, optional
         Dictionary of constants
         
@@ -998,7 +1116,7 @@ def parse_value(value_str, constants=None):
     if isinstance(value_str, (int, float)):
         return float(value_str)
     
-    # Unit conversions (all to mm)
+    # Unit conversions (all to mm for length, rad for angles)
     unit_conversions = {
         'mm': 1.0,
         'cm': 10.0,
@@ -1011,31 +1129,68 @@ def parse_value(value_str, constants=None):
     try:
         # Check if this is a direct constant reference
         if constants and value_str in constants:
-            return float(constants[value_str])
+            value = constants[value_str]
+            if isinstance(value, (int, float)):
+                return float(value)
+            # If constant itself is an expression, parse it recursively
+            return parse_value(str(value), constants)
             
-        # Remove units for processing
-        expr = value_str
-        unit_factor = 1.0
+        expr = str(value_str)
         
-        for unit, factor in unit_conversions.items():
-            if f'*{unit}' in expr:
-                expr = expr.replace(f'*{unit}', '')
-                unit_factor = factor
-                break
-        
-        # Substitute any constants in the expression
+        # First, substitute constants - need to do this before unit normalization
+        # to handle cases where constants contain units
         if constants:
-            for const_name, const_value in constants.items():
-                expr = expr.replace(const_name, str(const_value))
+            # Sort by length (longest first) to avoid partial replacements
+            const_names = sorted(constants.keys(), key=len, reverse=True)
+            for const_name in const_names:
+                const_value = constants[const_name]
+                # Convert constant value to string for substitution
+                if isinstance(const_value, (int, float)):
+                    const_str = str(const_value)
+                else:
+                    const_str = str(const_value)
+                # Only replace if it's a complete word/match
+                # Replace whole word matches of constant names
+                pattern = r'\b' + re.escape(const_name) + r'\b'
+                expr = re.sub(pattern, const_str, expr)
         
-        # Evaluate the mathematical expression
+        # Handle parentheses before unit normalization (e.g., "(787.105+1.75)*mm")
+        # First evaluate inner expressions if they're wrapped in parentheses followed by unit
+        paren_unit_pattern = r'\(([^)]+)\)\s*\*\s*(' + '|'.join(re.escape(u) for u in unit_conversions.keys()) + r')'
+        def eval_paren_unit(match):
+            inner_expr = match.group(1)
+            unit = match.group(2)
+            # Evaluate inner expression
+            inner_result = evaluate_math_expression(inner_expr)
+            if inner_result is not None:
+                # Convert to base unit
+                factor = unit_conversions[unit]
+                return str(inner_result * factor)
+            return match.group(0)  # Return original if evaluation fails
+        
+        # Replace parenthesized expressions with units
+        expr = re.sub(paren_unit_pattern, eval_paren_unit, expr)
+        
+        # Normalize all remaining units to a base unit (mm for length, rad for angles)
+        # Process each unit type, converting to base unit
+        for unit, factor in unit_conversions.items():
+            # Find all occurrences of number*unit pattern (but not already parenthesized ones)
+            pattern = r'([-+]?\d*\.?\d+)\s*\*\s*' + re.escape(unit)
+            def replace_unit(match):
+                value = float(match.group(1))
+                # Convert to base unit
+                converted = value * factor
+                return str(converted)
+            expr = re.sub(pattern, replace_unit, expr)
+        
+        # Evaluate the mathematical expression (now all units are normalized)
         result = evaluate_math_expression(expr)
         if result is not None:
-            return result * unit_factor
+            return result
             
         return None
     except Exception as e:
-        print(f"Warning: Could not parse value '{value_str}': {str(e)}")
+        # Don't print warning for every failed parse - many are expected
         return None
 
 
@@ -1102,6 +1257,93 @@ def parse_endcap_tracker_ring(ring, config, constants):
     }
 
 
+def derive_tracker_envelope_bounds(layer_info, constants, config):
+    """
+    Derive envelope bounds for tracker layers when direct parsing fails.
+    
+    Parameters:
+    -----------
+    layer_info : dict
+        Layer information dictionary (may already have some fields)
+    constants : dict
+        Constants dictionary
+    config : DetectorConfig
+        Detector configuration
+        
+    Returns:
+    --------
+    dict with 'inner_r', 'outer_r', 'z_length' if derivable, otherwise empty dict
+    """
+    derived = {}
+    
+    # Try to derive radial bounds from rc and module dimensions
+    rc = layer_info.get('rc')
+    width = layer_info.get('width')
+    
+    if rc is not None:
+        # Try to get radial extent from constants or module width
+        if width is not None:
+            # Estimate radial extent from module width
+            # For barrel trackers, modules are arranged around cylinder
+            # Use half module width plus some tolerance
+            half_width = width / 2.0
+            # Common offsets seen in tracker XMLs: ~6.2mm inner, ~45mm outer
+            inner_offset = 6.2  # Default fallback
+            outer_offset = 45.0  # Default fallback
+            
+            # Try to get more precise offsets from constants
+            detector_name = config.name if hasattr(config, 'name') else ''
+            if detector_name:
+                rc_dr = constants.get(f'{detector_name}_rc_dr')
+                if rc_dr is not None:
+                    inner_offset = rc_dr if isinstance(rc_dr, (int, float)) else parse_value(str(rc_dr), constants) or 6.2
+                # Outer offset is typically larger
+                outer_offset = max(inner_offset * 7, 45.0)  # Rough estimate
+            
+            derived['inner_r'] = rc - half_width - inner_offset
+            derived['outer_r'] = rc + half_width + outer_offset
+        else:
+            # If no module width, try to estimate from constants
+            detector_name = config.name if hasattr(config, 'name') else ''
+            if detector_name and constants:
+                # Try to get layer-specific constants
+                rc_key = f'{detector_name}_inner_rc'
+                if rc_key in constants:
+                    base_rc = parse_value(str(constants[rc_key]), constants)
+                    if base_rc:
+                        inner_offset = 6.2
+                        outer_offset = 45.0
+                        derived['inner_r'] = base_rc - inner_offset
+                        derived['outer_r'] = base_rc + outer_offset
+    
+    # Try to derive z_length from z0, nz, and module parameters
+    z0 = layer_info.get('z0')
+    nz = layer_info.get('nz')
+    length = layer_info.get('length')
+    
+    if z0 is not None:
+        if nz is not None and length is not None:
+            # Estimate z_length from module layout
+            # z_length = 2 * (z0 + module_length/2 + tolerance)
+            module_z_spacing = constants.get('SiTracker_module_z_spacing')
+            if module_z_spacing is not None:
+                module_z_spacing = parse_value(str(module_z_spacing), constants) or 42.2
+            else:
+                module_z_spacing = 42.2  # Default from XML
+            
+            # Estimate total z extent
+            z_extent = z0 + (nz - 1) * module_z_spacing / 2 if nz > 1 else z0
+            tolerance = 60.0  # Common tolerance seen in tracker XMLs
+            derived['z_length'] = 2 * (z_extent + length / 2 + tolerance)
+        elif z0 is not None:
+            # Fallback: estimate from z0 alone
+            tolerance = 60.0
+            estimated_length = length if length else 100.0  # Default module length
+            derived['z_length'] = 2 * (z0 + estimated_length / 2 + tolerance)
+    
+    return derived
+
+
 def parse_barrel_geometry(detector, config, geometry_info, constants):
     """Parse barrel-type detector geometry"""
     # First parse modules
@@ -1153,6 +1395,7 @@ def parse_barrel_geometry(detector, config, geometry_info, constants):
         
         # Get barrel envelope
         barrel_env = layer.find('barrel_envelope')
+        envelope_parsed = False
         if barrel_env is not None:
             inner_r = parse_value(barrel_env.get('inner_r'), constants)
             outer_r = parse_value(barrel_env.get('outer_r'), constants)
@@ -1165,6 +1408,7 @@ def parse_barrel_geometry(detector, config, geometry_info, constants):
                     'z_length': z_length,
                     'rc': (inner_r + outer_r) / 2
                 })
+                envelope_parsed = True
         
         # Get rphi layout
         rphi = layer.find('rphi_layout')
@@ -1213,6 +1457,20 @@ def parse_barrel_geometry(detector, config, geometry_info, constants):
             # Add to overall total
             if 'total_cells' in layer_info:
                 geometry_info['total_cells'] += layer_info['total_cells']
+        
+        # If envelope bounds are missing (especially for trackers), try to derive them
+        if not envelope_parsed and config.detector_class.lower() in ['tracker', 'vertex']:
+            derived_bounds = derive_tracker_envelope_bounds(layer_info, constants, config)
+            # Only update if we successfully derived bounds and they're still missing
+            for key in ['inner_r', 'outer_r', 'z_length']:
+                if key not in layer_info and key in derived_bounds:
+                    layer_info[key] = derived_bounds[key]
+            # If we derived envelope bounds but rc wasn't set from envelope, calculate it
+            if 'inner_r' in layer_info and 'outer_r' in layer_info:
+                if 'rc' not in layer_info:
+                    # Calculate rc from derived envelope bounds
+                    layer_info['rc'] = (layer_info['inner_r'] + layer_info['outer_r']) / 2
+                # If rc exists but was from rphi_layout, we keep it (it's more precise)
         
         # Store layer info
         geometry_info['layers'][layer_id] = layer_info
@@ -1407,14 +1665,29 @@ def parse_endcap_geometry(detector, config, geometry_info, constants):
             # Store some layer-level summary info
             n_rings = len(layer_info['rings'])
             total_modules = sum(ring['nmodules'] for ring in layer_info['rings'])
+            r_min = min(ring['r_inner'] for ring in layer_info['rings'])
+            r_max = max(ring['r_outer'] for ring in layer_info['rings'])
+            z_min = min(ring['z_min'] for ring in layer_info['rings'])
+            z_max = max(ring['z_max'] for ring in layer_info['rings'])
+            
             layer_info.update({
                 'n_rings': n_rings,
                 'total_modules': total_modules,
-                'r_min': min(ring['r_inner'] for ring in layer_info['rings']),
-                'r_max': max(ring['r_outer'] for ring in layer_info['rings']),
-                'z_min': min(ring['z_min'] for ring in layer_info['rings']),
-                'z_max': max(ring['z_max'] for ring in layer_info['rings'])
+                'r_min': r_min,
+                'r_max': r_max,
+                'z_min': z_min,
+                'z_max': z_max,
+                # Map to standard envelope field names for consistency
+                'inner_r': r_min,
+                'outer_r': r_max
             })
+            
+            # For endcap detectors, z_min/z_max are more appropriate than z_length
+            # but some code may expect z_length, so calculate it for compatibility
+            if z_min is not None and z_max is not None:
+                layer_info['z_length'] = z_max - z_min
+                # Store z center position as well
+                layer_info['z_center'] = (z_min + z_max) / 2
         else:
             print(f"Warning: No valid rings found for layer {layer_id}")
 
@@ -1558,6 +1831,26 @@ def parse_forward_geometry(detector, config, geometry_info, constants):
     outer_r = parse_value(dims.get("outer_r"), constants)
     inner_z = parse_value(dims.get("inner_z"), constants)
     outer_z = parse_value(dims.get("outer_z"), constants)
+    
+    # If outer_z is not specified, try to get from constants or calculate from layers
+    if outer_z is None:
+        # Try to get from constants (e.g., LumiCal_zmax)
+        detector_name = config.name if hasattr(config, 'name') else ''
+        if detector_name:
+            zmax_constant = constants.get(f'{detector_name}_zmax')
+            if zmax_constant is not None:
+                outer_z = parse_value(str(zmax_constant), constants)
+        
+        # If still None, calculate from layer thicknesses
+        if outer_z is None and inner_z is not None:
+            total_thickness = 0
+            for layer in detector.findall('.//layer'):
+                layer_info = parse_forward_calo_layer(layer, constants)
+                if layer_info:
+                    repeat = layer_info.get('repeat', 1)
+                    total_thickness += layer_info.get('total_thickness', 0) * repeat
+            if total_thickness > 0:
+                outer_z = inner_z + total_thickness
 
     geometry_info.update({
         'inner_r': inner_r,
@@ -1584,13 +1877,28 @@ def parse_forward_geometry(detector, config, geometry_info, constants):
         cells_per_layer = max(cells_per_layer, 1)
 
         for r in range(repeat):
-            geometry_info['layers'][layer_index] = {
+            layer_data = {
                 'cells_per_layer': cells_per_layer,
                 'sensitive_slices': sensitive_slices,
                 'total_cells': cells_per_layer * max(sensitive_slices, 1),
                 'repeat_group': layer_index - 1,
-                'repeat_number': r
+                'repeat_number': r,
+                # Add envelope bounds from detector-level
+                'inner_r': inner_r,
+                'outer_r': outer_r
             }
+            
+            # Add z bounds - use outer_z if available, otherwise calculate from layer thickness
+            if inner_z is not None:
+                layer_data['z_min'] = inner_z
+            if outer_z is not None:
+                layer_data['z_max'] = outer_z
+            elif inner_z is not None:
+                # Calculate approximate z_max from inner_z and detector extent
+                # This is a fallback - ideally outer_z should be in XML
+                layer_data['z_max'] = inner_z + 1000.0  # Large fallback value
+            
+            geometry_info['layers'][layer_index] = layer_data
             total_cells += cells_per_layer * max(sensitive_slices, 1)
             layer_index += 1
 
@@ -1631,7 +1939,11 @@ def parse_muon_geometry(detector, config, geometry_info, constants):
                     'sensitive_slices': sensitive_slices,
                     'total_cells': cells_per_layer * max(sensitive_slices, 1),
                     'repeat_group': layer_index - 1,
-                    'repeat_number': r
+                    'repeat_number': r,
+                    # Add envelope bounds
+                    'inner_r': r_min,
+                    'outer_r': r_max,
+                    'z_length': length
                 }
                 total_cells += cells_per_layer * max(sensitive_slices, 1)
                 layer_index += 1
@@ -1662,7 +1974,12 @@ def parse_muon_geometry(detector, config, geometry_info, constants):
                     'sensitive_slices': sensitive_slices,
                     'total_cells': cells_per_plate * max(sensitive_slices, 1),
                     'repeat_group': layer_index - 1,
-                    'repeat_number': r
+                    'repeat_number': r,
+                    # Add envelope bounds
+                    'inner_r': r_min,
+                    'outer_r': r_max,
+                    'z_min': z_min,
+                    'z_max': z_max
                 }
                 total_cells += cells_per_plate * max(sensitive_slices, 1)
                 layer_index += 1
