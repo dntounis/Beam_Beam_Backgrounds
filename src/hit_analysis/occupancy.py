@@ -212,6 +212,10 @@ def analyze_detector_hits(events_trees, detector_name, config, buffer_depths=Non
     """
     Analyze hits with improved coordinate and timing handling for different detector types.
     
+    For endcap and forward detectors, this function calculates occupancy separately for +z and -z sides,
+    then averages them for the final layer occupancy. Per-side occupancies are stored in the statistics
+    structure as 'occupancy_plus_z' and 'occupancy_minus_z' fields.
+    
     Parameters:
     -----------
     events_trees : list
@@ -245,6 +249,18 @@ def analyze_detector_hits(events_trees, detector_name, config, buffer_depths=Non
             'muon_hits': 50e-3,            # For Muon system hits, in GeV
             'muon_contributions': 5e-3      # For Muon hit contributions, in GeV
         }
+    
+    Returns:
+    --------
+    dict : Statistics dictionary with per-layer and per-threshold information.
+           For endcap/forward detectors, includes per-side occupancy fields:
+           - 'occupancy': Averaged occupancy (occupancy_plus_z + occupancy_minus_z) / 2
+           - 'occupancy_plus_z': Occupancy for +z side
+           - 'occupancy_minus_z': Occupancy for -z side
+           - 'cells_above_threshold_plus_z': Cell count above threshold for +z
+           - 'cells_above_threshold_minus_z': Cell count above threshold for -z
+           - 'total_hits_plus_z': Total hits for +z side
+           - 'total_hits_minus_z': Total hits for -z side
     """
     if buffer_depths is None:
         buffer_depths = [1]
@@ -545,11 +561,25 @@ def analyze_detector_hits(events_trees, detector_name, config, buffer_depths=Non
             continue
     
     # Compute per-threshold statistics
+    # Check if this detector uses side separation (endcap/forward detectors)
+    uses_side_separation = config.detector_type.lower() in ['endcap', 'forward']
+    
     stats = {}
     for threshold in buffer_depths:
         layer_stats = {}
+        layer_side_stats = {}  # For per-side statistics (endcap/forward only)
+        
         for pixel_key, count in pixel_hits.items():
-            layer = pixel_key[0]
+            if uses_side_separation and len(pixel_key) >= 5:
+                # Endcap/forward detector: pixel_key is (layer, side, module, pixel_x, pixel_y)
+                layer = pixel_key[0]
+                side = pixel_key[1]
+            else:
+                # Barrel detector: pixel_key is (layer, module, pixel_t, pixel_z) or similar
+                layer = pixel_key[0]
+                side = None
+            
+            # Initialize layer stats if needed
             if layer not in layer_stats:
                 layer_stats[layer] = {
                     'cells_hit': 0,
@@ -558,18 +588,88 @@ def analyze_detector_hits(events_trees, detector_name, config, buffer_depths=Non
                     'max_hits': 0,
                     'hit_counts': []
                 }
+            
+            # Initialize per-side stats if using side separation
+            if uses_side_separation and side is not None:
+                side_key = (layer, side)
+                if side_key not in layer_side_stats:
+                    layer_side_stats[side_key] = {
+                        'cells_hit': 0,
+                        'total_hits': 0,
+                        'cells_above_threshold': 0,
+                        'hit_counts': []
+                    }
+            
+            # Accumulate statistics
             layer_stats[layer]['cells_hit'] += 1
             layer_stats[layer]['total_hits'] += count
             if count >= threshold:
                 layer_stats[layer]['cells_above_threshold'] += 1
             layer_stats[layer]['max_hits'] = max(layer_stats[layer]['max_hits'], count)
             layer_stats[layer]['hit_counts'].append(count)
+            
+            # Accumulate per-side statistics
+            if uses_side_separation and side is not None:
+                side_key = (layer, side)
+                layer_side_stats[side_key]['cells_hit'] += 1
+                layer_side_stats[side_key]['total_hits'] += count
+                if count >= threshold:
+                    layer_side_stats[side_key]['cells_above_threshold'] += 1
+                layer_side_stats[side_key]['hit_counts'].append(count)
+        
+        # Calculate occupancies
         for layer, lstats in layer_stats.items():
             if geometry_info and layer in geometry_info['layers']:
                 total_cells = geometry_info['layers'][layer].get('total_cells', 0)
-                lstats['occupancy'] = (lstats['cells_above_threshold'] / total_cells) if total_cells > 0 else 0.0
+                
+                if uses_side_separation:
+                    # Calculate per-side occupancies and average them
+                    occupancy_plus_z = 0.0
+                    occupancy_minus_z = 0.0
+                    cells_above_threshold_plus_z = 0
+                    cells_above_threshold_minus_z = 0
+                    total_hits_plus_z = 0
+                    total_hits_minus_z = 0
+                    
+                    # Get +z side stats (side == 0)
+                    plus_z_key = (layer, 0)
+                    if plus_z_key in layer_side_stats:
+                        side_stats = layer_side_stats[plus_z_key]
+                        cells_above_threshold_plus_z = side_stats['cells_above_threshold']
+                        total_hits_plus_z = side_stats['total_hits']
+                        occupancy_plus_z = (cells_above_threshold_plus_z / total_cells) if total_cells > 0 else 0.0
+                    
+                    # Get -z side stats (side == 1)
+                    minus_z_key = (layer, 1)
+                    if minus_z_key in layer_side_stats:
+                        side_stats = layer_side_stats[minus_z_key]
+                        cells_above_threshold_minus_z = side_stats['cells_above_threshold']
+                        total_hits_minus_z = side_stats['total_hits']
+                        occupancy_minus_z = (cells_above_threshold_minus_z / total_cells) if total_cells > 0 else 0.0
+                    
+                    # Average the occupancies
+                    occupancy_avg = (occupancy_plus_z + occupancy_minus_z) / 2.0 if (occupancy_plus_z > 0 or occupancy_minus_z > 0) else 0.0
+                    
+                    lstats['occupancy'] = occupancy_avg
+                    lstats['occupancy_plus_z'] = occupancy_plus_z
+                    lstats['occupancy_minus_z'] = occupancy_minus_z
+                    lstats['cells_above_threshold_plus_z'] = cells_above_threshold_plus_z
+                    lstats['cells_above_threshold_minus_z'] = cells_above_threshold_minus_z
+                    lstats['total_hits_plus_z'] = total_hits_plus_z
+                    lstats['total_hits_minus_z'] = total_hits_minus_z
+                else:
+                    # Barrel detector: standard occupancy calculation
+                    lstats['occupancy'] = (lstats['cells_above_threshold'] / total_cells) if total_cells > 0 else 0.0
             else:
                 lstats['occupancy'] = 0.0
+                if uses_side_separation:
+                    lstats['occupancy_plus_z'] = 0.0
+                    lstats['occupancy_minus_z'] = 0.0
+                    lstats['cells_above_threshold_plus_z'] = 0
+                    lstats['cells_above_threshold_minus_z'] = 0
+                    lstats['total_hits_plus_z'] = 0
+                    lstats['total_hits_minus_z'] = 0
+            
             lstats['mean_hits'] = np.mean(lstats['hit_counts'])
             del lstats['hit_counts']
         # Build safe stats even when layer_stats is empty
@@ -907,20 +1007,64 @@ def summarize_stats_over_detector(stats, geometry_info, threshold=1):
     except Exception:
         total_cells = 0
 
+    per_layer = stats.get('threshold_stats', {}).get(threshold, {}).get('per_layer', {})
+    detector_area_mm2 = geometry_info.get('total_sensitive_area_mm2')
+    detector_area_cm2 = geometry_info.get('total_sensitive_area_cm2')
+
     # Sum total hits from stats per-layer
-    total_hits = 0
+    total_hits = 0.0
     try:
-        per_layer = stats.get('threshold_stats', {}).get(threshold, {}).get('per_layer', {})
         for layer_stats in per_layer.values():
             total_hits += float(layer_stats.get('total_hits', 0) or 0)
     except Exception:
         total_hits = 0.0
 
-    mean_occupancy = (total_hits / total_cells) if total_cells > 0 else 0.0
+    # Determine if side-separated statistics are available
+    uses_side_separation = any(
+        isinstance(layer_stats, dict) and (
+            'occupancy_plus_z' in layer_stats or 'occupancy_minus_z' in layer_stats
+        )
+        for layer_stats in per_layer.values()
+    )
+
+    # Compute mean occupancy using the stored per-layer occupancy (weighted by geometry cells)
+    weighted_occupancy = 0.0
+    total_cells_weight = 0
+    try:
+        for layer_id, layer_stats in per_layer.items():
+            layer_info = geometry_info.get('layers', {}).get(layer_id)
+            if not layer_info:
+                continue
+            layer_cells = int(layer_info.get('total_cells', 0) or 0)
+            occupancy = layer_stats.get('occupancy')
+            if occupancy is None:
+                continue
+            weighted_occupancy += occupancy * layer_cells
+            total_cells_weight += layer_cells
+    except Exception:
+        weighted_occupancy = 0.0
+        total_cells_weight = 0
+
+    if total_cells_weight > 0:
+        mean_occupancy = weighted_occupancy / total_cells_weight
+    else:
+        # Fallback to hit-based estimate, adjusting for side separation
+        effective_cells = total_cells * (2 if uses_side_separation else 1)
+        mean_occupancy = (total_hits / effective_cells) if effective_cells > 0 else 0.0
+
+    effective_total_cells = total_cells * (2 if uses_side_separation else 1)
+
+    # Cast counts to integers when possible
+    total_cells = int(total_cells)
+    effective_total_cells = int(effective_total_cells)
 
     return {
         'detector_name': geometry_info.get('detector_name', stats.get('detector_name', 'unknown')),
         'total_hits': total_hits,
         'total_cells': total_cells,
+        'effective_total_cells': effective_total_cells,
+        'uses_side_separation': uses_side_separation,
+        'total_area_mm2': detector_area_mm2,
+        'total_area_cm2': detector_area_cm2,
         'mean_occupancy': mean_occupancy,
     }

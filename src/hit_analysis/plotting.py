@@ -16,7 +16,73 @@ from src.utils.histogram_utils import (
     compute_rphi_area_map,
     compute_rz_area_map,
     extract_layer_geometry,
+    filter_hits_to_geometry,
 )
+
+
+def _configure_polar_axis(ax, r_values, theta_step=45, r_label_angle=135):
+    """Tidy polar layout so angular labels and radial ticks avoid overlap."""
+
+    r_array = np.asarray(r_values)
+    r_array = r_array[np.isfinite(r_array)]
+    if r_array.size == 0:
+        r_max = 1.0
+    else:
+        r_max = float(np.max(r_array))
+        if r_max <= 0:
+            r_max = 1.0
+
+    margin = 0.05 * r_max
+    ax.set_ylim(0, r_max + margin)
+
+    theta = np.arange(0, 360, theta_step)
+    theta_rad = np.deg2rad(theta)
+    ax.set_xticks(theta_rad)
+    ax.set_xticklabels([])
+    # Draw custom angular labels oriented tangent to the circle
+    for angle, angle_rad in zip(theta, theta_rad):
+        deg = int(angle) % 360
+        rotation = np.rad2deg(angle_rad) + 90
+        if deg in (0, 180):
+            rotation = 0
+        elif 45 <= deg <= 135:
+            rotation -= 180
+        ax.text(angle_rad, r_max + margin * 3, f"{deg}°",
+                rotation=rotation, rotation_mode='anchor',
+                ha='center', va='center', fontsize=12)
+
+    ax.tick_params(axis='x', pad=12)
+    ax.tick_params(axis='y', pad=6)
+    ax.set_rlabel_position(r_label_angle)
+
+    r_ticks = np.linspace(r_max / 4.0, r_max, 3)
+    if r_max >= 50:
+        step = 5
+    elif r_max >= 20:
+        step = 2
+    else:
+        step = 1
+    r_ticks = np.round(r_ticks / step) * step
+    r_ticks = np.unique(r_ticks)
+    r_ticks = r_ticks[r_ticks > 0]
+    if r_ticks.size:
+        tick_labels = [f"{tick:.0f}" if tick >= 5 else f"{tick:.1f}" for tick in r_ticks]
+        ax.set_rgrids(r_ticks, labels=['' for _ in r_ticks], angle=r_label_angle)
+        angle_rad = np.deg2rad(r_label_angle)
+        for tick, label in zip(r_ticks, tick_labels):
+            ax.text(angle_rad, tick + 0.015 * r_max, label,
+                    ha='center', va='center', fontsize=12,
+                    rotation=r_label_angle - 90,
+                    rotation_mode='anchor',
+                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.85))
+        # Lightly emphasize the guide line used for labels
+        ax.plot([angle_rad, angle_rad], [0, r_max + margin],
+                color='k', alpha=0.6, linewidth=1.0, linestyle='--', zorder=2)
+
+    ax.yaxis.set_label_coords(-0.2, 0.80)
+    ax.yaxis.label.set_rotation(90)
+    ax.yaxis.label.set_verticalalignment('center')
+    ax.yaxis.label.set_horizontalalignment('center')
 
 
 def _configure_log_yticks(ax):
@@ -93,7 +159,7 @@ def plot_hit_distribution(stats, output_file=None):
 
 
 def plot_occupancy_analysis(stats, geometry_info, output_prefix=None, time_cut=-1, nlayer_batch=1,
-                            occupancy_scale=1.0):
+                            occupancy_scale=1.0, geometry_filter_tolerance=1.0):
     """
     Create detailed visualizations of the occupancy analysis
     
@@ -108,6 +174,9 @@ def plot_occupancy_analysis(stats, geometry_info, output_prefix=None, time_cut=-
     time_cut : float, optional
         Cut on hit time in ns (-1 for no cut)
     nlayer_batch : int, optional
+    geometry_filter_tolerance : float, optional
+        Maximum (mm) a hit may lie outside the parsed geometry before being
+        discarded from R-phi/R-z/timing visualizations.
     """
     # Create figure with multiple subplots
     fig = plt.figure(figsize=(15, 10))
@@ -246,16 +315,35 @@ def plot_occupancy_analysis(stats, geometry_info, output_prefix=None, time_cut=-
     ax1.grid(True)
     ax1.legend()
     
+    layer_metadata = extract_layer_geometry(geometry_info)
+
+    # Debug: inspect surviving hits before geometry masking
+    try:
+        debug_count = len(r_vals)
+        geom_mask = filter_hits_to_geometry(r_vals, z_vals, layer_metadata,
+                                            tolerance=geometry_filter_tolerance)
+        debug_filtered = int(np.count_nonzero(geom_mask)) if hasattr(np, 'count_nonzero') else int(sum(geom_mask))
+        print("JIM DEBUG [geom-filter]", detector_label,
+              "hits before mask:", debug_count,
+              "after mask:", debug_filtered)
+    except Exception:
+        pass
+
     # 2. R-Phi hit distribution
     ax2 = fig.add_subplot(gs[0, 1], projection='polar')
     # Convert awkward arrays to numpy arrays
     phi_vals = ak.to_numpy(stats['positions']['phi'])
     r_vals = ak.to_numpy(stats['positions']['r'])
+    z_vals = ak.to_numpy(stats['positions']['z'])
+
+    geom_mask = filter_hits_to_geometry(r_vals, z_vals, layer_metadata,
+                                        tolerance=geometry_filter_tolerance)
+    phi_filtered = phi_vals[geom_mask] if geom_mask.size else phi_vals
+    r_filtered = r_vals[geom_mask] if geom_mask.size else r_vals
 
     # Create the edges first
-    hist, xedges, yedges = np.histogram2d(phi_vals, r_vals, bins=[51, 21])
+    hist, xedges, yedges = np.histogram2d(phi_filtered, r_filtered, bins=[51, 21])
 
-    layer_metadata = extract_layer_geometry(geometry_info)
     area_map = compute_rphi_area_map(layer_metadata, xedges, yedges)
     with np.errstate(invalid='ignore', divide='ignore'):
         hist_normalized = np.divide(hist, area_map, where=area_map > 0)
@@ -266,18 +354,18 @@ def plot_occupancy_analysis(stats, geometry_info, output_prefix=None, time_cut=-
                          shading='auto', cmap=cmap,
                          edgecolors='none')
     ax2.set_facecolor('white')
-    ax2.set_ylabel('R [mm]',fontsize=18)
-    ax2.set_xlabel('Phi [rad]',fontsize=18)
+    ax2.set_ylabel('R [mm]', fontsize=18)
+    ax2.set_xlabel('Phi [rad]', fontsize=18)
+    _configure_polar_axis(ax2, r_filtered)
     #ax2.set_title('Hit Distribution (R-Phi)',fontsize=20)
     if pcm is not None:
         plt.colorbar(pcm, ax=ax2, label='Hits/mm²')
 
     # 3. R-Z hit distribution
     ax3 = fig.add_subplot(gs[1, :])
-    # Convert awkward arrays to numpy arrays
-    z_vals = ak.to_numpy(stats['positions']['z'])
-    r_vals = ak.to_numpy(stats['positions']['r'])
-    hist, xedges, yedges = np.histogram2d(z_vals, r_vals, bins=[100, 30])
+    z_filtered = z_vals[geom_mask] if geom_mask.size else z_vals
+    r_filtered_for_rz = r_filtered if geom_mask.size else r_vals
+    hist, xedges, yedges = np.histogram2d(z_filtered, r_filtered_for_rz, bins=[100, 30])
     area_map_rz = compute_rz_area_map(layer_metadata, xedges, yedges)
     with np.errstate(invalid='ignore', divide='ignore'):
         hist_normalized = np.divide(hist, area_map_rz, where=area_map_rz > 0)
@@ -331,7 +419,8 @@ def plot_occupancy_analysis(stats, geometry_info, output_prefix=None, time_cut=-
     plt.close(fig_occ)
 
 
-def plot_timing_analysis(stats, geometry_info, output_prefix=None):
+def plot_timing_analysis(stats, geometry_info, output_prefix=None, geometry_filter_tolerance=1.0):
+    """Create timing visualizations with optional geometry-based hit filtering."""
     # Create figure with multiple subplots
     fig = plt.figure(figsize=(15, 10))
     plt.style.use(hep.style.CMS)
@@ -363,6 +452,24 @@ def plot_timing_analysis(stats, geometry_info, output_prefix=None):
     gs = plt.GridSpec(2, 2)
 
     time_vals = ak.to_numpy(stats['times'])
+    r_vals = ak.to_numpy(stats['positions']['r'])
+    z_vals = ak.to_numpy(stats['positions']['z'])
+    phi_vals = ak.to_numpy(stats['positions']['phi'])
+
+    layer_metadata = extract_layer_geometry(geometry_info)
+    geom_mask = filter_hits_to_geometry(r_vals, z_vals, layer_metadata,
+                                        tolerance=geometry_filter_tolerance)
+    if geom_mask.size:
+        time_vals = time_vals[geom_mask]
+        r_vals = r_vals[geom_mask]
+        z_vals = z_vals[geom_mask]
+        phi_vals = phi_vals[geom_mask]
+
+    if time_vals.size == 0:
+        print("JIM DEBUG [timing]", detector_label,
+              "no hits after thresholds – skipping timing plot")
+        return
+
     #t_edges = np.linspace(0, max(stats['times']), 100) #Jim: change time range
     t_edges = np.linspace(0, 100, 100)
 
@@ -378,8 +485,10 @@ def plot_timing_analysis(stats, geometry_info, output_prefix=None):
     # 2. Timing vs R
     ax2 = fig.add_subplot(gs[1, 0])
 
-    r_vals = ak.to_numpy(stats['positions']['r'])
-    r_edges = np.linspace(0, max(stats['positions']['r']), 21)
+    if r_vals.size:
+        r_edges = np.linspace(0, r_vals.max(), 21)
+    else:
+        r_edges = np.linspace(0, 1, 21)
 
     hist, xedges, yedges = np.histogram2d(r_vals,time_vals,
                             bins=[r_edges,t_edges]) 
@@ -404,8 +513,10 @@ def plot_timing_analysis(stats, geometry_info, output_prefix=None):
     # 3. Timing vs Z
     ax3 = fig.add_subplot(gs[1, 1])
 
-    z_vals = ak.to_numpy(stats['positions']['z'])
-    z_edges = np.linspace(min(stats['positions']['z']), max(stats['positions']['z']), 100)
+    if z_vals.size:
+        z_edges = np.linspace(z_vals.min(), z_vals.max(), 100)
+    else:
+        z_edges = np.linspace(-1, 1, 100)
 
     hist, xedges, yedges = np.histogram2d(z_vals, time_vals, 
                             bins=[z_edges, t_edges]) 
@@ -427,7 +538,6 @@ def plot_timing_analysis(stats, geometry_info, output_prefix=None):
     # 4. Timing vs Phi
     ax4 = fig.add_subplot(gs[0, 1])
 
-    phi_vals = ak.to_numpy(stats['positions']['phi'])
     phi_edges = np.linspace(-np.pi, np.pi, 51)
 
     hist, xedges, yedges = np.histogram2d(phi_vals, time_vals, 
@@ -441,7 +551,8 @@ def plot_timing_analysis(stats, geometry_info, output_prefix=None):
                         vmin=0,
                         edgecolors='none')
     ax4.set_facecolor('#3F007D')
-    ax4.set_xlabel('Phi [rad]',fontsize=18)
+    ax4.set_xlabel('Phi [rad]',fontsize=18, labelpad=10)
+    ax4.tick_params(axis='x', pad=8)
     ax4.set_ylabel('Time [ns]',fontsize=18)
 
     plt.colorbar(pcm, ax=ax4, label='Hits')
@@ -456,11 +567,13 @@ def plot_timing_analysis(stats, geometry_info, output_prefix=None):
 
 
    
-def plot_detector_analysis(stats, geometry_info, detector_name, output_prefix=None):
+def plot_detector_analysis(stats, geometry_info, detector_name, output_prefix=None,
+                           geometry_filter_tolerance=1.0):
     """
     Create detailed visualizations of the detector analysis
     
-    Parameters as before
+    Parameters as before, with optional geometry_filter_tolerance allowing
+    tighter or looser rejection of out-of-geometry hits (in mm).
     """
     fig = plt.figure(figsize=(15, 10))
     gs = plt.GridSpec(2, 2)
@@ -487,8 +600,20 @@ def plot_detector_analysis(stats, geometry_info, detector_name, output_prefix=No
 
     phi_vals = ak.to_numpy(stats['positions']['phi'])
     r_vals = ak.to_numpy(stats['positions']['r'])
-    hist, _, _ = np.histogram2d(phi_vals, r_vals, bins=[50, 20])
-    r_edges = np.linspace(0, max(r_vals), 21)
+    z_vals = ak.to_numpy(stats['positions']['z'])
+
+    layer_metadata = extract_layer_geometry(geometry_info)
+    geom_mask = filter_hits_to_geometry(r_vals, z_vals, layer_metadata,
+                                        tolerance=geometry_filter_tolerance)
+    phi_filtered = phi_vals[geom_mask] if geom_mask.size else phi_vals
+    r_filtered = r_vals[geom_mask] if geom_mask.size else r_vals
+
+    hist, _, _ = np.histogram2d(phi_filtered, r_filtered, bins=[50, 20])
+    r_edge_source = r_filtered if geom_mask.size else r_vals
+    if r_edge_source.size:
+        r_edges = np.linspace(0, r_edge_source.max(), 21)
+    else:
+        r_edges = np.linspace(0, 1, 21)
     r_bin_width = np.diff(r_edges)[0]  # R bin width in mm
     phi_edges = np.linspace(-np.pi, np.pi, 51)
     R, PHI = np.meshgrid(r_edges[:-1], phi_edges[:-1])
@@ -517,6 +642,9 @@ def plot_detector_analysis(stats, geometry_info, detector_name, output_prefix=No
 
     pcm = ax2.pcolormesh(PHI, R, hist_normalized.T, shading='auto')
     #ax2.set_title(f'{detector_name} Hit Distribution (R-Phi)',fontsize=20)
+    ax2.set_ylabel('R [mm]', fontsize=18)
+    ax2.set_xlabel('Phi [rad]', fontsize=18)
+    _configure_polar_axis(ax2, r_filtered)
     plt.colorbar(pcm, ax=ax2, label='Hits/mm²')
     
     # ax2.text(0.02, 0.02, f"Bin size: {phi_bin_width:.2f} rad × {t_bin_width:.1f} ns", 
@@ -525,8 +653,9 @@ def plot_detector_analysis(stats, geometry_info, detector_name, output_prefix=No
     # 3. R-Z hit distribution
     ax3 = fig.add_subplot(gs[1, :])
 
-    z_vals = ak.to_numpy(stats['positions']['z'])
-    hist, xedges, yedges = np.histogram2d(z_vals, r_vals, bins=[100, 20])
+    z_filtered = z_vals[geom_mask] if geom_mask.size else z_vals
+    r_filtered_for_rz = r_filtered if geom_mask.size else r_vals
+    hist, xedges, yedges = np.histogram2d(z_filtered, r_filtered_for_rz, bins=[100, 20])
     
 
     # Calculate bin sizes for normalization

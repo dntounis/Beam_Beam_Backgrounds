@@ -404,8 +404,8 @@ HPP_MU = 0.059
 
 
 # Plot label parameters
-SCENARIO_LABEL = "C³ 250 B.L."  # Shown on left with (N bunches/train)
-# B.L. , s.u. , high-L
+SCENARIO_LABEL = "C³ 250 BL"  # Shown on left with (N bunches/train)
+# BL , s.u. , high-L
 
 DETECTOR_VERSION = "SiD_o2_v04"  # Shown on right with subdetector and background type
 
@@ -473,7 +473,6 @@ muon_endcap_xml = xmls['muon_endcap_xml']
 # Override per-subdetector cell sizes using the table-provided values
 # Barrel
 DETECTOR_CONFIGS['SiVertexBarrel'].cell_sizes['default'] = {'x': 0.010, 'y': 0.010}
-#DETECTOR_CONFIGS['SiVertexBarrel'].cell_sizes['default'] = {'x': 0.034, 'y': 0.034}
 DETECTOR_CONFIGS['SiTrackerBarrel'].cell_sizes['default'] = {'x': 0.025,  'y': 0.100}
 DETECTOR_CONFIGS['ECalBarrel'].cell_sizes['default']    = {'x': 0.025,  'y': 0.100}
 DETECTOR_CONFIGS['HCalBarrel'].cell_sizes['default']    = {'x': 30.0,  'y': 30.0}
@@ -484,8 +483,7 @@ DETECTOR_CONFIGS['MuonBarrel'].cell_sizes['default']    = {'x': 41.0,  'y': 5500
 # Endcap / Forward
 DETECTOR_CONFIGS['SiVertexEndcap'].cell_sizes['default']   = {'x': 0.010, 'y': 0.010}
 DETECTOR_CONFIGS['SiTrackerForward'].cell_sizes['default'] = {'x': 0.010, 'y': 0.010}
-#DETECTOR_CONFIGS['SiVertexEndcap'].cell_sizes['default']   = {'x': 0.030, 'y': 0.030}
-#DETECTOR_CONFIGS['SiTrackerForward'].cell_sizes['default'] = {'x': 0.030, 'y': 0.030}
+
 
 
 DETECTOR_CONFIGS['SiTrackerEndcap'].cell_sizes['default']  = {'x': 0.025,  'y': 0.100}
@@ -527,10 +525,10 @@ DETECTOR_CONFIGS['BeamCal'].cell_sizes['default']          = {'x': 5.0,  'y': 5.
 # Try analyzing all detectors again
 detectors_to_analyze = [
     ('SiVertexBarrel', vertex_barrel_xml),
-    #('SiVertexEndcap', vertex_endcap_xml),
-    # ('SiTrackerBarrel', tracker_barrel_xml),
-    # ('SiTrackerEndcap', tracker_endcap_xml),
-    #('SiTrackerForward', tracker_forward_xml),
+    ('SiVertexEndcap', vertex_endcap_xml),
+    ('SiTrackerBarrel', tracker_barrel_xml),
+    ('SiTrackerEndcap', tracker_endcap_xml),
+    ('SiTrackerForward', tracker_forward_xml),
     # ('ECalBarrel', ecal_barrel_xml),
     # ('ECalEndcap', ecal_endcap_xml),
     # ('HCalBarrel', hcal_barrel_xml),
@@ -590,6 +588,7 @@ custom_thresholds = {
     'SiVertexBarrel_silicon': 0.6e-6, # 0.6 keV
     'SiVertexEndcap_silicon': 0.5e-6, # 0.5 keV
     'SiTrackerBarrel_silicon': 3e-5, # 30 keV
+    #'SiTrackerBarrel_silicon': 3e-10,  # JIM: REMEMBER TO CHANGE BACK TO 3e-5!!!!
     'SiTrackerEndcap_silicon': 3e-5, # 30 keV
     'SiTrackerForward_silicon': 0.4e-6, # 0.4 keV
     #ECAL examples (hits and contribution thresholds)
@@ -607,6 +606,12 @@ custom_thresholds = {
     'BeamCal_contributions': 1e-20,
     'LumiCal_hits': 4e-5, # 40 keV
     'LumiCal_contributions': 1e-20,
+    #Muon examples
+   'MuonBarrel_hits': 5e-6,
+   'MuonBarrel_contributions': 1e-20,
+   'MuonEndcap_hits': 5e-6,
+   'MuonEndcap_contributions': 1e-20,
+
 }
 
 
@@ -683,9 +688,22 @@ OCCUPANCY_YLIMS = {
     'SiTrackerEndcap': (5e-8, 5e-5),
     'SiTrackerForward': (1e-7, 5e-3),
 }
+
+
+
+# Optional per-detector geometry-filter tolerances in mm. Hits lying more than
+# this distance outside the parsed volume are discarded in R-phi/R-z plots.
+# Update per detector as needed; 'default' applies when no explicit value set.
+GEOMETRY_FILTER_TOLERANCES = {
+    'default': 1.0,
+     'SiVertexBarrel': 0.9,
+     'SiVertexEndcap': 0.9,
+     'SiTrackerForward': 0.9,
+     #'SiTrackerBarrel':
+}
     
 # Limit concurrent train processing to avoid exhausting file descriptors
-TRAIN_BATCH_SIZE = 3 # how many batches to split the total numer of trains into
+TRAIN_BATCH_SIZE = 4 # how many batches to split the total numer of trains into
 MAX_TRAIN_WORKERS = 30 # how many workers to use to process each train batch
 
 
@@ -697,8 +715,8 @@ print(f"  - Vectorized hit processing: {'✓' if USE_VECTORIZED_PROCESSING else 
 detectors_to_analyze = [
    ('SiVertexBarrel', vertex_barrel_xml),
    ('SiVertexEndcap', vertex_endcap_xml),
-   #   ('SiTrackerBarrel', tracker_barrel_xml),
-   #   ('SiTrackerEndcap', tracker_endcap_xml),
+   ('SiTrackerBarrel', tracker_barrel_xml),
+   ('SiTrackerEndcap', tracker_endcap_xml),
    ('SiTrackerForward', tracker_forward_xml),
    #   ('ECalBarrel', ecal_barrel_xml),
    #   ('ECalEndcap', ecal_endcap_xml),
@@ -755,7 +773,8 @@ events_trees_by_train = analyze_detectors_and_plot_by_train(
      occupancy_ylim_map=OCCUPANCY_YLIMS,
      occupancy_scaling_map=OCCUPANCY_SCALING_FACTORS,
      train_batch_size=TRAIN_BATCH_SIZE,
-     max_train_workers=MAX_TRAIN_WORKERS
+     max_train_workers=MAX_TRAIN_WORKERS,
+     geometry_filter_tolerances=GEOMETRY_FILTER_TOLERANCES
  )
 
  
