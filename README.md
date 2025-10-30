@@ -10,6 +10,8 @@ The background-production pipeline illustrated in `Simulation_flowchart.png` / `
 - Both backgrounds are transported through **ddsim** with the SiD geometry from `k4geo`, generating detector-level SimHits.
 - Downstream analyses consume the ddsim outputs to derive timing (single bunch vs. full train), occupancy, and per-subdetector hit-rate summaries; envelopes and spectra are archived alongside the detector-level products.
 
+![Simulation Flowchart](Simulation_flowchart.png)
+
 ## Repository structure
 
 - `IPC/`
