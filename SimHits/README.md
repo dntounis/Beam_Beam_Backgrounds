@@ -1,6 +1,6 @@
 ## EDM4hep Timing Studies Snapshot
 
-This directory provides a self-contained snapshot (synced on 2025-10-26) of the Python workflows used to analyse EDM4hep timing information and to produce background hit-rate summaries for the C\(^3\) collider studies. Every tool here can be run directly with:
+This directory provides a  Python workflow to analyze EDM4hep timing information and to produce background hit-rate summaries for electron-positorn collider studies. Every tool here can be run directly with:
 
 ```
 python timing_studies/<script_name>.py [options]
@@ -152,14 +152,6 @@ pip install scipy mplhep
 - `--area-report FILE`: write sensitive-area metadata to a custom path.
 - `--title-prefix`, `--title-suffix`: append text to figure titles.
 - Optional energy-threshold JSON inputs can be supplied via dedicated script arguments when needed.
-
----
-
-## Notebook (`hit_plotting.ipynb`)
-
-- Mirrors the script APIs for IPC and optional HPP processing.
-- Configure file paths, thresholds, and binning in the first cell (`config` block) before running.
-- Generates per-branch timing plots, combined R–Z heatmaps, and summary tables directly within the notebook environment.
 
 ---
 
@@ -315,16 +307,9 @@ SCENARIOS
 
 ---
 
-## Provenance
-
-This snapshot mirrors the development state from 2025-10-26. Update this README whenever new options or behavioural changes are introduced in the scripts or notebook.
-
----
-
 ## Acknowledgements
 
 - ROOT I/O and columnar manipulation through `uproot` and `awkward`.
 - Numerical routines via `numpy` (and `scipy` when available).
 - Plotting provided by `matplotlib`; CMS-inspired styling powered by `mplhep`.
-- Geometry-aware hit-rate calculations leverage the SiD detector descriptions used in the August 2025 C\(^3\) studies.
 
