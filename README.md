@@ -3,7 +3,7 @@
 [![DOI](https://zenodo.org/badge/1065466550.svg)](https://zenodo.org/badge/latestdoi/1065466550)
 
 Companion codebase for the paper **Beam-Beam Backgrounds for the Cool Copper Collider** by Dimitrios Ntounis, Caterina Vernieri, Lindsey Gray, Elias Mettner, Tim Barklow, Laith Gordon and Emilio A. Nanni.  
-External links: [arXiv (coming soon)](https://arxiv.org/abs/TBD) | [Journal submission (pending)](https://doi.org/placeholder)
+External links: [arXiv (coming soon)](https://arxiv.org/abs/2511.01075) | [Journal submission (pending)](https://doi.org/placeholder)
 
 The background-production pipeline illustrated in `Simulation_flowchart.png` / `Simulation_flowchart.pdf` proceeds as follows:
 - Beam parameters (beta*, epsilon*, sigma_z, sqrt(s), ...) seed **GUINEA-PIG**, producing luminosity spectra, particle ntuples, and per-seed bunch trains for incoherent pair creation (IPC).
