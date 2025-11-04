@@ -748,7 +748,7 @@ def analyze_detectors_and_plot(DETECTOR_CONFIGS=None, detectors_to_analyze=None,
             xmls = get_xmls()
             main_xml = xmls['main_xml']
             # Pass detector name to get specific debug info
-            constants = parse_detector_constants(main_xml, detector_name)
+            constants = parse_detector_constants(main_xml, detector_name, detector_xml_file=xml_file)
             geometry_info = get_geometry_info(xml_file, detector_config, constants=constants)
             
             # Print geometry info

@@ -86,6 +86,7 @@ Parses SiD detector XML files to extract physical dimensions and cell counts:
 - **`cellid_decoders.py`**: Decodes DD4hep cellID bitfields into detector-specific fields (layer, module, sensor, etc.)
 
 **Key Capabilities**:
+- Extends parsed endcap disk envelopes by the module material thickness and the ±`dz` staggering used during placement, aligning geometry acceptance with the DD4hep detector construction and preventing legitimate hits near the disk faces from being misclassified.
 - Handles complex XML expressions: `"SiTrackerBarrel_inner_rc - 6.2*mm"`
 - Supports parenthesized expressions: `"(787.105+1.75)*mm"`
 - Constant substitution with word-boundary matching
@@ -358,7 +359,7 @@ The framework now tracks the two halves independently and reports both component
 - The default `occupancy` field used in plots and summaries is the **average** of the two sides.  
   (This matches the single-disk geometry cell count while exposing the individual sides for cross-checks.)
 - Summary rows list both the nominal cell total and an `effective` total (×2 when both sides are present) so per-side and combined averages are easy to verify.
-- The terminal summary additionally prints the sensitive area (cm²) obtained from the DD4hep geometry helper for quick cross-checks.
+- The terminal summary additionally prints the sensitive area (cm²) obtained from the DD4hep geometry helper, the weighted occupancy (layer-weighted) and a simple average `total_hits / effective_total_cells` for quick cross-checks.
 - Verification plots with suffix `_VERIFY_plus_minus_z` overlay the +z (solid) and −z (dashed) curves to highlight asymmetries.
 
 Use the new `interactive_plots` argument in `analyze_detectors_and_plot_by_train()` (and the plotting helpers) to control whether `plt.show()` is called.  

@@ -371,27 +371,27 @@ print(len(seeds))
 
 #============================= INPUTS =============================
 
-bunches_per_train = 133 #133 #266 #532
-#bunches_per_train = 300 #75 #150 #300
+#bunches_per_train = 532 #133 #266 #532
+bunches_per_train = 300 #75 #150 #300
 
 
 # Directory path and filename pattern
 
 # for 250 BL and s.u.
-base_path = "/fs/ddn/sdf/group/atlas/d/dntounis/C^3/bkg_studies_2023/GuineaPig_July_2024/output_new/C3_250_PS1/ddsim/"
-filename_pattern = "ddsim_C3_250_PS1_v2_seed_{}.edm4hep.root"
+#base_path = "/fs/ddn/sdf/group/atlas/d/dntounis/C^3/bkg_studies_2023/GuineaPig_July_2024/output_new/C3_250_PS1/ddsim/"
+#filename_pattern = "ddsim_C3_250_PS1_v2_seed_{}.edm4hep.root"
 
 # for 250 high-L
 #base_path = "/fs/ddn/sdf/group/atlas/d/dntounis/C^3/bkg_studies_2023/GuineaPig_July_2024/output_new/C3_250_PS2/ddsim/"
 #filename_pattern = "ddsim_C3_250_PS2_v2_seed_{}.edm4hep.root"
 
 # for all 550 scenarios
-#base_path = "/fs/ddn/sdf/group/atlas/d/dntounis/C^3/bkg_studies_2023/GuineaPig_July_2024/output_new/C3_550_PS2/ddsim/"
-#filename_pattern = "ddsim_C3_550_PS2_v2_seed_{}_MERGED.edm4hep.root"
+base_path = "/fs/ddn/sdf/group/atlas/d/dntounis/C^3/bkg_studies_2023/GuineaPig_July_2024/output_new/C3_550_PS2/ddsim/"
+filename_pattern = "ddsim_C3_550_PS2_v2_seed_{}_MERGED.edm4hep.root"
 
 # for 250 BL and s.u.
-HPP_FILE = "/fs/ddn/sdf/group/atlas/d/dntounis/C^3/hadron_photoproduction/aahadhad/work_C3_250_PS1/ddsim_C3_250_PS1_gg_had_MERGED.edm4hep.root"  # e.g. "/path/to/hpp_background.edm4hep.root"
-HPP_MU = 0.059    
+#HPP_FILE = "/fs/ddn/sdf/group/atlas/d/dntounis/C^3/hadron_photoproduction/aahadhad/work_C3_250_PS1/ddsim_C3_250_PS1_gg_had_MERGED.edm4hep.root"  # e.g. "/path/to/hpp_background.edm4hep.root"
+#HPP_MU = 0.059    
 
 # for 250 high-L
 #HPP_FILE = "/fs/ddn/sdf/group/atlas/d/dntounis/C^3/hadron_photoproduction/aahadhad/work_C3_250_PS2/ddsim_C3_250_PS2_gg_had_MERGED.edm4hep.root"  # e.g. "/path/to/hpp_background.edm4hep.root"
@@ -399,12 +399,12 @@ HPP_MU = 0.059
 
 
 # for all 550 scenarios
-#HPP_FILE = "/fs/ddn/sdf/group/atlas/d/dntounis/C^3/hadron_photoproduction/aahadhad/work_C3_550_PS2/ddsim_C3_550_PS2_gg_had_MERGED.edm4hep.root"  # e.g. "/path/to/hpp_background.edm4hep.root"
-#HPP_MU = 0.29    
+HPP_FILE = "/fs/ddn/sdf/group/atlas/d/dntounis/C^3/hadron_photoproduction/aahadhad/work_C3_550_PS2/ddsim_C3_550_PS2_gg_had_MERGED.edm4hep.root"  # e.g. "/path/to/hpp_background.edm4hep.root"
+HPP_MU = 0.29    
 
 
 # Plot label parameters
-SCENARIO_LABEL = "C³ 250 BL"  # Shown on left with (N bunches/train)
+SCENARIO_LABEL = "C³ 550  high-L"  # Shown on left with (N bunches/train)
 # BL , s.u. , high-L
 
 DETECTOR_VERSION = "SiD_o2_v04"  # Shown on right with subdetector and background type
@@ -529,14 +529,14 @@ detectors_to_analyze = [
     ('SiTrackerBarrel', tracker_barrel_xml),
     ('SiTrackerEndcap', tracker_endcap_xml),
     ('SiTrackerForward', tracker_forward_xml),
-    # ('ECalBarrel', ecal_barrel_xml),
-    # ('ECalEndcap', ecal_endcap_xml),
-    # ('HCalBarrel', hcal_barrel_xml),
-    # ('HCalEndcap', hcal_endcap_xml),
-    # ('BeamCal', beamcal_xml),
-    # ('LumiCal', lumical_xml),
-    # ('MuonBarrel', muon_barrel_xml),
-    # ('MuonEndcap', muon_endcap_xml)
+    ('ECalBarrel', ecal_barrel_xml),
+    ('ECalEndcap', ecal_endcap_xml),
+    ('HCalBarrel', hcal_barrel_xml),
+    ('HCalEndcap', hcal_endcap_xml),
+    ('BeamCal', beamcal_xml),
+    ('LumiCal', lumical_xml),
+    ('MuonBarrel', muon_barrel_xml),
+    ('MuonEndcap', muon_endcap_xml)
 ]
 
 
@@ -555,7 +555,7 @@ for detector_name, xml_file in detectors_to_analyze:
 
         detector_config = DETECTOR_CONFIGS[detector_name]
         # Pass detector name to get specific debug info
-        constants = parse_detector_constants(main_xml, detector_name)
+        constants = parse_detector_constants(main_xml, detector_name, detector_xml_file=xml_file)
         geometry_info = get_geometry_info(xml_file, detector_config, constants=constants)
         
         print("Jim: geometry info = ", geometry_info)
@@ -696,9 +696,10 @@ OCCUPANCY_YLIMS = {
 # Update per detector as needed; 'default' applies when no explicit value set.
 GEOMETRY_FILTER_TOLERANCES = {
     'default': 1.0,
-     'SiVertexBarrel': 0.9,
-     'SiVertexEndcap': 0.9,
-     'SiTrackerForward': 0.9,
+     #'SiVertexBarrel': 0.9,
+     #'SiVertexEndcap': 0.9,
+     #'SiTrackerForward': 0.9,
+     #'SiTrackerEndcap': 10000000.0, #JIM
      #'SiTrackerBarrel':
 }
     
@@ -718,10 +719,10 @@ detectors_to_analyze = [
    ('SiTrackerBarrel', tracker_barrel_xml),
    ('SiTrackerEndcap', tracker_endcap_xml),
    ('SiTrackerForward', tracker_forward_xml),
-   #   ('ECalBarrel', ecal_barrel_xml),
-   #   ('ECalEndcap', ecal_endcap_xml),
-   #   ('HCalBarrel', hcal_barrel_xml),
-   #   #('HCalEndcap', hcal_endcap_xml),
+     #('ECalBarrel', ecal_barrel_xml),
+    # ('ECalEndcap', ecal_endcap_xml),
+    # ('HCalBarrel', hcal_barrel_xml),
+     #('HCalEndcap', hcal_endcap_xml),
    #   ('BeamCal', beamcal_xml),
    #   ('LumiCal', lumical_xml),
    #   ('MuonBarrel', muon_barrel_xml),

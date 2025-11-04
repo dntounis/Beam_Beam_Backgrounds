@@ -509,12 +509,23 @@ def get_tracker_pixel_id(hit_pos, decoded, config, layer_info, cell_size):
         
         # Get pixel indices using ring module dimensions
         if matching_ring['type'] == 'trd':
-            # For trapezoid, use average width
-            module_width = (matching_ring['x1'] + matching_ring['x2']) / 2
-            module_length = matching_ring['z']
+            if 'azimuthal_width_inner' in matching_ring and 'azimuthal_width_outer' in matching_ring:
+                module_width = 0.5 * (matching_ring['azimuthal_width_inner'] + matching_ring['azimuthal_width_outer'])
+            else:
+                module_width = matching_ring.get('x1', 0.0) + matching_ring.get('x2', 0.0)
+
+            if 'radial_thickness' in matching_ring:
+                module_length = matching_ring['radial_thickness']
+            else:
+                module_length = matching_ring.get('z', 0.0)
         else:
-            module_width = matching_ring['width']
-            module_length = matching_ring['length']
+            module_width = matching_ring.get('width', 0.0)
+            module_length = matching_ring.get('length', 0.0)
+
+        if module_width <= 0:
+            module_width = cell_size['x']
+        if module_length <= 0:
+            module_length = cell_size['y']
             
         pixel_x = int((local_x + module_width/2) / cell_size['x'])
         pixel_y = int((local_y + module_length/2) / cell_size['y'])

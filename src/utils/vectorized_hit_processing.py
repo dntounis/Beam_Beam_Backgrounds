@@ -250,13 +250,25 @@ def _fill_tracker_endcap(indices: np.ndarray, layer_info: Dict, cell_size: Dict,
         local_y = dx * sin_phi + dy * cos_phi
 
         if ring.get('type') == 'trd':
-            module_width = (ring.get('x1', 0.0) + ring.get('x2', 0.0)) / 2.0
-            module_length = ring.get('z', 0.0)
+            if 'azimuthal_width_inner' in ring and 'azimuthal_width_outer' in ring:
+                module_width = 0.5 * (ring['azimuthal_width_inner'] + ring['azimuthal_width_outer'])
+            else:
+                module_width = ring.get('x1', 0.0) + ring.get('x2', 0.0)
+
+            if 'radial_thickness' in ring:
+                module_length = ring['radial_thickness']
+            else:
+                module_length = ring.get('z', 0.0)
         else:
             module_width = ring.get('width', layer_info.get('width'))
             module_length = ring.get('length', layer_info.get('length'))
+
         if module_width is None or module_length is None:
             continue
+        if module_width <= 0:
+            module_width = cell_size['x']
+        if module_length <= 0:
+            module_length = cell_size['y']
 
         px = np.floor((local_x + module_width / 2.0) / cell_size['x']).astype(np.int32)
         py = np.floor((local_y + module_length / 2.0) / cell_size['y']).astype(np.int32)
