@@ -2,6 +2,7 @@ cff-version: 1.0.1
 message: "If you use this software, please cite it as below."
 title: Beam-Beam Backgrounds for the Cool Copper Collider Software Companion
 version: v1.0.1
+doi: 10.5281/zenodo.17518429
 date-released: 2025-11-04
 type: software
 authors:
