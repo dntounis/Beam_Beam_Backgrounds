@@ -1,6 +1,8 @@
 # Beam-Beam Backgrounds for the Cool Copper Collider
 
-Companion codebase for the paper **Beam-Beam Backgrounds for the Cool Copper Collider** by Dimitrios Ntounis, Caterina Vernieri, Lindsey Gray, Elias Mettner, Emilio A. Nanni, and Tim Barklow.  
+[![DOI](https://zenodo.org/badge/1065466550.svg)](https://zenodo.org/badge/latestdoi/1065466550)
+
+Companion codebase for the paper **Beam-Beam Backgrounds for the Cool Copper Collider** by Dimitrios Ntounis, Caterina Vernieri, Lindsey Gray, Elias Mettner, Tim Barklow, Laith Gordon and Emilio A. Nanni.  
 External links: [arXiv (coming soon)](https://arxiv.org/abs/TBD) | [Journal submission (pending)](https://doi.org/placeholder)
 
 The background-production pipeline illustrated in `Simulation_flowchart.png` / `Simulation_flowchart.pdf` proceeds as follows:
