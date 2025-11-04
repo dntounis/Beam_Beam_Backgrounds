@@ -1,14 +1,16 @@
-cff-version: 1.2.0
-message: If you use this software, please cite the companion paper once it is available.
+cff-version: 1.0.1
+message: "If you use this software, please cite it as below."
 title: Beam-Beam Backgrounds for the Cool Copper Collider Software Companion
+version: v1.0.1
+date-released: 2025-11-04
 type: software
 authors:
   - family-names: Ntounis
     given-names: Dimitrios
   - family-names: Gray
     given-names: Lindsey
-repository-code: https://github.com/PLACEHOLDER/Beam_Beam_Backgrounds
-url: https://github.com/PLACEHOLDER/Beam_Beam_Backgrounds
+repository-code: https://github.com/dntounis/Beam_Beam_Backgrounds
+url: https://github.com/dntounis/Beam_Beam_Backgrounds
 abstract: Code, workflows, and analysis utilities supporting the Beam-Beam Backgrounds for the Cool Copper Collider study.
 preferred-citation:
   type: article
@@ -22,10 +24,13 @@ preferred-citation:
       given-names: Lindsey
     - family-names: Mettner
       given-names: Elias
-    - family-names: Nanni
-      given-names: Emilio A.
     - family-names: Barklow
       given-names: Tim
+    - family-names: Gordon
+      given-names: Laith
+    - family-names: Nanni
+      given-names: Emilio A.
+
   year: 2025
   journal: Journal placeholder
   doi: 10.1234/placeholder
