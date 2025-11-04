@@ -56,14 +56,26 @@ def _regular_polygon_ring_area(num_sides: Optional[int], inner: float, outer: fl
 
 
 def _extract_numsides(root: ET.Element, constants: Mapping[str, float]) -> Optional[int]:
-    shape = root.find(".//envelope/shape")
-    if shape is None:
-        return None
-    num_sides = shape.get("numsides")
-    value = _eval_attr(num_sides, constants)
-    if value is None:
-        return None
-    return max(int(round(value)), 0)
+    for shape in root.findall(".//envelope//shape"):
+        for attr in ("numsides", "nsides", "n_sides"):
+            num_sides = shape.get(attr)
+            if num_sides is None:
+                continue
+            value = _eval_attr(num_sides, constants)
+            if value is not None:
+                return max(int(round(value)), 0)
+
+    dimensions = root.find(".//dimensions")
+    if dimensions is not None:
+        for attr in ("numsides", "nsides", "nsides_outer", "outer_nsides"):
+            num_sides = dimensions.get(attr)
+            if num_sides is None:
+                continue
+            value = _eval_attr(num_sides, constants)
+            if value is not None:
+                return max(int(round(value)), 0)
+
+    return None
 
 
 def _detector_reflect_multiplier(detector_elem: ET.Element) -> int:
@@ -152,7 +164,7 @@ def _parse_layer_slices(layer_elem: ET.Element, constants: Mapping[str, float]) 
     slices: List[Tuple[float, bool]] = []
     for slice_elem in layer_elem.findall("slice"):
         thickness = _eval_attr(slice_elem.get("thickness"), constants) or 0.0
-        sensitive = slice_elem.get("sensitive", "").strip().lower() == "yes"
+        sensitive = slice_elem.get("sensitive", "").strip().lower() in {"yes", "true", "1"}
         slices.append((thickness, sensitive))
     return slices
 
@@ -282,7 +294,7 @@ def compute_detector_areas(
         if not os.path.isfile(xml_path):
             raise FileNotFoundError(f"XML file for {detector} not found: {xml_path}")
 
-        constants = parse_detector_constants(main_xml, detector)
+        constants = parse_detector_constants(main_xml, detector, detector_xml_file=xml_path)
         geometry_info = _quiet_geometry_info(xml_path, config, constants=constants, main_xml=main_xml)
 
         tree = ET.parse(xml_path)

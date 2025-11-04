@@ -397,7 +397,7 @@ def parse_calorimeter_layer(layer_elem, constants):
     # Count sensitive slices
     sensitive_slices = []
     for i, slice_elem in enumerate(layer_elem.findall('slice')):
-        if slice_elem.get('sensitive', '').lower() == 'yes':
+        if slice_elem.get('sensitive', '').strip().lower() in {'yes', 'true', '1'}:
             sensitive_slices.append(i)
     layer_info['sensitive_slices'] = sensitive_slices
     
@@ -447,7 +447,7 @@ def parse_forward_calo_layer(layer_elem, constants):
         if thickness is not None:
             total_thickness += thickness
             
-        if slice_elem.get('sensitive', '').lower() == 'yes':
+        if slice_elem.get('sensitive', '').strip().lower() in {'yes', 'true', '1'}:
             sensitive_slices.append({
                 'index': i,
                 'thickness': thickness,
@@ -710,8 +710,19 @@ def calculate_module_position(layer_info, module_idx, geometry_type='barrel'):
 
 
 
-def parse_detector_constants(main_xml_file, detector_name=None):
-    """Parse detector constants with dependency resolution"""
+def parse_detector_constants(main_xml_file, detector_name=None, detector_xml_file=None):
+    """Parse detector constants with dependency resolution.
+
+    Parameters
+    ----------
+    main_xml_file : str
+        Path to the main compact XML.
+    detector_name : str, optional
+        Name of the detector whose constants should be resolved.
+    detector_xml_file : str, optional
+        Path to the detector-specific XML. Constants defined there override
+        or extend the main XML definitions.
+    """
     tree = ET.parse(main_xml_file)
     root = tree.getroot()
     
@@ -729,7 +740,20 @@ def parse_detector_constants(main_xml_file, detector_name=None):
             'evaluation_steps': []
         }
     
-    # Add SiTrackerBarrel specific constants and dependencies
+    if detector_xml_file and os.path.isfile(detector_xml_file):
+        detector_tree = ET.parse(detector_xml_file)
+        detector_root = detector_tree.getroot()
+        for constant in detector_root.findall('.//constant'):
+            name = constant.get('name')
+            value_str = constant.get('value')
+            raw_constants[name] = value_str
+            debug[name] = {
+                'raw_value': value_str,
+                'dependencies': set(),
+                'evaluation_steps': []
+            }
+
+    # Add SiTrackerBarrel specific constants and dependencies (legacy fallback)
     if detector_name == 'SiTrackerBarrel':
         tracker_base = {
             'SiTracker_module_z_spacing': '42.2*mm',
@@ -1354,22 +1378,39 @@ def parse_barrel_geometry(detector, config, geometry_info, constants):
             continue
             
         env = module.find('module_envelope')
-        if env is not None:
-            width = parse_value(env.get('width'), constants)
-            length = parse_value(env.get('length'), constants)
-            
-            if width is not None and length is not None:
-                cell_size = config.get_cell_size()
-                pixels_x = int(width / cell_size['x'])
-                pixels_y = int(length / cell_size['y'])
-                
-                modules[name] = {
-                    'width': width,
-                    'length': length,
-                    'pixels_x': pixels_x,
-                    'pixels_y': pixels_y,
-                    'total_pixels': pixels_x * pixels_y
-                }
+        envelope_width = parse_value(env.get('width'), constants) if env is not None else None
+        envelope_length = parse_value(env.get('length'), constants) if env is not None else None
+
+        sensitive_width = None
+        sensitive_length = None
+        for component in module.findall('module_component'):
+            if component.get('sensitive', '').strip().lower() in {'yes', 'true', '1'}:
+                sensitive_width = parse_value(component.get('width'), constants) or sensitive_width
+                sensitive_length = parse_value(component.get('length'), constants) or sensitive_length
+                # Use the first sensitive component we encounter.
+                if sensitive_width is not None and sensitive_length is not None:
+                    break
+
+        module_width = sensitive_width if sensitive_width is not None else envelope_width
+        module_length = sensitive_length if sensitive_length is not None else envelope_length
+
+        if module_width is not None and module_length is not None:
+            cell_size = config.get_cell_size()
+            pixels_x = max(1, int(round(module_width / cell_size['x']))) if cell_size['x'] > 0 else 1
+            pixels_y = max(1, int(round(module_length / cell_size['y']))) if cell_size['y'] > 0 else 1
+
+            modules[name] = {
+                'module_width': module_width,
+                'module_length': module_length,
+                'module_envelope_width': envelope_width,
+                'module_envelope_length': envelope_length,
+                # Backwards compatibility: expose width/length keys.
+                'width': module_width,
+                'length': module_length,
+                'pixels_x': pixels_x,
+                'pixels_y': pixels_y,
+                'total_pixels': pixels_x * pixels_y
+            }
     
     # Parse layers
     for layer in detector.findall('.//layer'):
@@ -1493,11 +1534,18 @@ def parse_endcap_geometry(detector, config, geometry_info, constants):
     """
     # First parse all module definitions
     modules = {}
+    trd_orientation = _get_trd_orientation(config)
     for module in detector.findall(".//module"):
         name = module.get('name')
         if name is None:
             continue
-        
+
+        axial_thickness = 0.0
+        for component in module.findall('module_component'):
+            thickness_val = parse_value(component.get('thickness'), constants)
+            if thickness_val is not None:
+                axial_thickness += thickness_val
+       
         # Try trd (trapezoid) definition first
         trd = module.find('trd')
         if trd is not None:
@@ -1510,10 +1558,21 @@ def parse_endcap_geometry(detector, config, geometry_info, constants):
                 # Get cell size from config
                 cell_size = config.get_cell_size()
                 
-                # Calculate average width for pixel counting
-                avg_width = (x1 + x2) / 2
-                pixels_x = int(avg_width / cell_size['x'])
-                pixels_y = int(z / cell_size['y'])
+                if trd_orientation == 'radial_z':
+                    # For SiD disk detectors the TRD parameters describe half-widths/thicknesses
+                    width_inner = 2.0 * x1
+                    width_outer = 2.0 * x2
+                    avg_width = 0.5 * (width_inner + width_outer)
+                    full_thickness = 2.0 * z
+                else:
+                    # Historical orientation: treat the parameters as full dimensions
+                    width_inner = x1
+                    width_outer = x2
+                    avg_width = (x1 + x2) / 2.0
+                    full_thickness = z
+
+                pixels_x = max(1, int(round(avg_width / cell_size['x']))) if cell_size['x'] > 0 else 1
+                pixels_y = max(1, int(round(full_thickness / cell_size['y']))) if cell_size['y'] > 0 else 1
                 total_pixels = pixels_x * pixels_y
                 
                 modules[name] = {
@@ -1521,11 +1580,14 @@ def parse_endcap_geometry(detector, config, geometry_info, constants):
                     'x1': x1,
                     'x2': x2,
                     'z': z,
-                    'width': avg_width,  # Use average width for calculations
-                    'length': z,
+                    'width': avg_width,
+                    'width_inner': width_inner,
+                    'width_outer': width_outer,
+                    'length': full_thickness,
                     'pixels_x': pixels_x,
                     'pixels_y': pixels_y,
-                    'total_pixels': total_pixels
+                    'total_pixels': total_pixels,
+                    'axial_thickness': axial_thickness
                 }
                 continue
         
@@ -1547,7 +1609,8 @@ def parse_endcap_geometry(detector, config, geometry_info, constants):
                     'length': length,
                     'pixels_x': pixels_x,
                     'pixels_y': pixels_y,
-                    'total_pixels': total_pixels
+                    'total_pixels': total_pixels,
+                    'axial_thickness': axial_thickness
                 }
     
     # Parse layers
@@ -1610,13 +1673,22 @@ def parse_endcap_geometry(detector, config, geometry_info, constants):
             
             # Only add ring if we have valid basic parameters
             if all(v is not None for v in [r, zstart]) and nmodules > 0:
+                module_axial = module.get('axial_thickness', 0.0) if module is not None else 0.0
+                axial_slack = 0.0
+                if module_axial and module_axial > 0.0:
+                    axial_slack += 0.5 * module_axial
+                if dz:
+                    axial_slack += abs(dz)
+
                 ring_info.update({
                     'r': r,
                     'zstart': zstart,
                     'nmodules': nmodules,
                     'phi0': phi0,
                     'dz': dz,
-                    'total_cells': nmodules * module['total_pixels'] * repeat
+                    'total_cells': nmodules * module['total_pixels'] * repeat,
+                    'axial_thickness': module_axial,
+                    'axial_slack': axial_slack
                 })
                 
                 # Calculate ring bounds using correct orientation
@@ -1653,6 +1725,20 @@ def parse_endcap_geometry(detector, config, geometry_info, constants):
                         'z_min': zstart,
                         'z_max': zstart + ring_info['length']
                     })
+
+                if axial_slack > 0.0:
+                    z_min_existing = ring_info.get('z_min')
+                    z_max_existing = ring_info.get('z_max')
+                    adjusted_min = zstart - axial_slack
+                    adjusted_max = zstart + axial_slack
+                    if z_min_existing is None:
+                        ring_info['z_min'] = adjusted_min
+                    else:
+                        ring_info['z_min'] = min(z_min_existing, adjusted_min)
+                    if z_max_existing is None:
+                        ring_info['z_max'] = adjusted_max
+                    else:
+                        ring_info['z_max'] = max(z_max_existing, adjusted_max)
                 
                 layer_info['rings'].append(ring_info)
                 layer_info['total_cells'] += ring_info['total_cells']

@@ -58,7 +58,7 @@ def extract_detector_dimensions():
             
             try:
                 config = configs[detector_name]
-                constants = parse_detector_constants(main_xml, detector_name)
+                constants = parse_detector_constants(main_xml, detector_name, detector_xml_file=xml_path)
                 geometry_info = get_geometry_info(xml_path, config, constants=constants, main_xml=main_xml)
                 
                 # Extract dimensions based on detector type

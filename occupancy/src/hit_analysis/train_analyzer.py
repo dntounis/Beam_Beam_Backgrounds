@@ -7,6 +7,8 @@ import mplhep as hep
 import traceback
 import re
 from collections import Counter
+from itertools import cycle
+from matplotlib import font_manager
 from matplotlib.colors import LogNorm
 from typing import Dict, List
 
@@ -272,7 +274,7 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
 
         try:
             detector_config = DETECTOR_CONFIGS[detector_name]
-            constants = parse_detector_constants(main_xml, detector_name)
+            constants = parse_detector_constants(main_xml, detector_name, detector_xml_file=xml_file)
             geometry_info = get_geometry_info(xml_file, detector_config, constants=constants)
 
             area_info = detector_areas.get(detector_name)
@@ -371,15 +373,21 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
                     # Add summary row for this mode
                     try:
                         summary = summarize_stats_over_detector(stats, geometry_info, threshold=1)
+                        effective_cells = int(summary.get('effective_total_cells', summary['total_cells']))
+                        weighted_occ = summary['mean_occupancy']
+                        avg_occ = (summary['total_hits'] / effective_cells) if effective_cells > 0 else 0.0
                         summary_rows.append({
                             'detector': detector_name,
                             'mode': mode_label,
                             'total_hits': summary['total_hits'],
                             'total_cells': int(summary['total_cells']),
-                            'effective_total_cells': int(summary.get('effective_total_cells', summary['total_cells'])),
+                            'effective_total_cells': effective_cells,
                             'area_cm2': geometry_info.get('total_sensitive_area_cm2'),
-                            'mean_occupancy': summary['mean_occupancy'],
-                            'scaled_mean_occupancy': summary['mean_occupancy'] * scale_factor
+                            'weighted_mean_occupancy': weighted_occ,
+                            'avg_occupancy': avg_occ,
+                            'scaled_weighted_mean_occupancy': weighted_occ * scale_factor,
+                            'mean_occupancy': weighted_occ,
+                            'scaled_mean_occupancy': weighted_occ * scale_factor
                         })
                     except Exception:
                         pass
@@ -425,15 +433,21 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
                 # Add summary row for single-mode case
                 try:
                     summary = summarize_stats_over_detector(stats, geometry_info, threshold=1)
+                    effective_cells = int(summary.get('effective_total_cells', summary['total_cells']))
+                    weighted_occ = summary['mean_occupancy']
+                    avg_occ = (summary['total_hits'] / effective_cells) if effective_cells > 0 else 0.0
                     summary_rows.append({
                         'detector': detector_name,
                         'mode': 'IPC',
                         'total_hits': summary['total_hits'],
                         'total_cells': int(summary['total_cells']),
-                        'effective_total_cells': int(summary.get('effective_total_cells', summary['total_cells'])),
+                        'effective_total_cells': effective_cells,
                         'area_cm2': geometry_info.get('total_sensitive_area_cm2'),
-                        'mean_occupancy': summary['mean_occupancy'],
-                        'scaled_mean_occupancy': summary['mean_occupancy'] * scale_factor
+                        'weighted_mean_occupancy': weighted_occ,
+                        'avg_occupancy': avg_occ,
+                        'scaled_weighted_mean_occupancy': weighted_occ * scale_factor,
+                        'mean_occupancy': weighted_occ,
+                        'scaled_mean_occupancy': weighted_occ * scale_factor
                     })
                 except Exception:
                     pass
@@ -460,8 +474,12 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
             header = (
                 f"{'Detector':<18} {'Mode':<6} {'Total Hits/train':>18} "
                 f"{'Total Cells':>14} {'Eff. Cells':>14} {'Area [cm^2]':>14} "
-                f"{'Mean Occ.':>12} {'Mean Occ. (w/ safety factor,cluster size)':>41}"
+                f"{'Weighted Occ.':>14} {'Avg Occ.':>12} "
+                f"{'Weighted Occ. (w/ safety factor,cluster size)':>46}"
             )
+            print("\nOccupancy reporting note:")
+            print("  weighted_mean_occupancy = Σ(occupancy_layer × cells_layer) / Σ(cells_layer)")
+            print("  avg_occupancy = total_hits / effective_total_cells (mirrored detectors use both ±z sides)")
             print("\nSummary per subdetector (per train):")
             print(header)
             print('-' * len(header))
@@ -473,9 +491,10 @@ def analyze_detectors_and_plot_by_train(DETECTOR_CONFIGS=None, detectors_to_anal
                 etc = int(row.get('effective_total_cells', tc))
                 area_cm2 = row.get('area_cm2')
                 area_str = f"{area_cm2:14.2f}" if isinstance(area_cm2, (int, float)) else f"{'n/a':>14}"
-                mo = row['mean_occupancy']
-                smo = row.get('scaled_mean_occupancy', mo)
-                print(f"{det:<18} {mode:<6} {th:18.3f} {tc:14d} {etc:14d} {area_str} {mo:12.3e} {smo:41.3e}")
+                weighted = row['weighted_mean_occupancy']
+                avg_occ = row.get('avg_occupancy', 0.0)
+                smo = row.get('scaled_weighted_mean_occupancy', weighted)
+                print(f"{det:<18} {mode:<6} {th:18.3f} {tc:14d} {etc:14d} {area_str} {weighted:14.3e} {avg_occ:12.3e} {smo:46.3e}")
         except Exception:
             pass
 
@@ -509,6 +528,7 @@ def plot_train_averaged_occupancy_analysis(stats, geometry_info, output_prefix=N
     # Create figure with multiple subplots
     fig = plt.figure(figsize=(15, 10))
     plt.style.use(hep.style.CMS)
+    legend_fontsize = plt.rcParams.get('legend.fontsize', None)
 
     # Get train info
     bunches_per_train = stats.get('train_info', {}).get('bunches_per_train', 0)
@@ -624,7 +644,7 @@ def plot_train_averaged_occupancy_analysis(stats, geometry_info, output_prefix=N
             ax1.set_ylim(occupancy_ylim)
         except ValueError:
             pass
-    ax1.legend()
+    ax1.legend(fontsize=legend_fontsize)
     
     layer_metadata = extract_layer_geometry(geometry_info)
 
@@ -830,14 +850,31 @@ def plot_train_averaged_occupancy_analysis_plus_minus_z(stats, geometry_info, ou
         batch = all_layers[i:i+nlayer_batch]
         if batch:  # Skip empty batches
             layer_batches.append(batch)
-    
+
     # Plot occupancy for each batch, showing +z and -z separately
+    prop_cycle = plt.rcParams.get('axes.prop_cycle')
+    color_list = prop_cycle.by_key().get('color', ['C0']) if prop_cycle is not None else ['C0']
+    color_cycle = cycle(color_list)
+    batch_colors: Dict[str, str] = {}
+
+    default_legend_size = plt.rcParams.get('legend.fontsize', plt.rcParams.get('font.size', 10))
+    try:
+        resolved_size = font_manager.FontProperties(size=default_legend_size).get_size_in_points()
+    except Exception:
+        resolved_size = 10.0
+    legend_fontsize = max(resolved_size - 4, 4)
+
     for i, batch in enumerate(layer_batches):
         # Label for the batch
         if len(batch) == 1:
             batch_label_base = f'Layer {batch[0]}'
         else:
             batch_label_base = f'Layers {batch[0]}-{batch[-1]}'
+
+        layer_color = batch_colors.get(batch_label_base)
+        if layer_color is None:
+            layer_color = next(color_cycle)
+            batch_colors[batch_label_base] = layer_color
         
         # Calculate occupancies for +z and -z sides separately
         occupancies_plus_z = []
@@ -904,12 +941,14 @@ def plot_train_averaged_occupancy_analysis_plus_minus_z(stats, geometry_info, ou
             thresholds,
             scaled_plus_z,
             yerr=scaled_err_plus_z,
-            fmt='o-',
+            color=layer_color,
+            linestyle='-',
+            marker='o',
             label=f'{batch_label_base} (+z)',
             capsize=3,
             alpha=0.8
         )
-        series_data.append((f'{batch_label_base} (+z)', scaled_plus_z, scaled_err_plus_z))
+        series_data.append((f'{batch_label_base} (+z)', scaled_plus_z, scaled_err_plus_z, layer_color, '-', 'o'))
         
         # Plot -z side
         scaled_minus_z = [val * scale for val in occupancies_minus_z]
@@ -918,12 +957,14 @@ def plot_train_averaged_occupancy_analysis_plus_minus_z(stats, geometry_info, ou
             thresholds,
             scaled_minus_z,
             yerr=scaled_err_minus_z,
-            fmt='s--',
+            color=layer_color,
+            linestyle='--',
+            marker='s',
             label=f'{batch_label_base} (-z)',
             capsize=3,
             alpha=0.8
         )
-        series_data.append((f'{batch_label_base} (-z)', scaled_minus_z, scaled_err_minus_z))
+        series_data.append((f'{batch_label_base} (-z)', scaled_minus_z, scaled_err_minus_z, layer_color, '--', 's'))
     
     ax1.set_xlabel('Buffer depth', fontsize=18)
     ax1.set_ylabel('Layer occupancy', fontsize=18)
@@ -1008,12 +1049,14 @@ def plot_train_averaged_occupancy_analysis_plus_minus_z(stats, geometry_info, ou
     fig_occ.text(0.01, 0.98, compact_left + time_note + " - +z/-z Verification", ha='left', va='top', fontsize=16)
     fig_occ.text(0.99, 0.98, right_title, ha='right', va='top', fontsize=16)
 
-    for label, vals, errs in series_data:
+    for label, vals, errs, color, linestyle, marker in series_data:
         ax_occ.errorbar(
             thresholds,
             vals,
             yerr=errs,
-            fmt='o-' if '(+z)' in label else 's--',
+            color=color,
+            linestyle=linestyle,
+            marker=marker,
             label=label,
             capsize=3,
             alpha=0.8
@@ -1025,7 +1068,7 @@ def plot_train_averaged_occupancy_analysis_plus_minus_z(stats, geometry_info, ou
     ax_occ.set_xticks(thresholds)
     ax_occ.set_xticklabels([str(int(t)) for t in thresholds])
     ax_occ.grid(True)
-    ax_occ.legend()
+    ax_occ.legend(fontsize=legend_fontsize)
     fig_occ.tight_layout(rect=(0, 0, 1, 0.95))
 
     if output_prefix:

@@ -352,7 +352,7 @@ def process_detectors_parallel(detectors_to_analyze: List[Tuple], events_trees_b
             
             DETECTOR_CONFIGS = get_detector_configs()
             detector_config = DETECTOR_CONFIGS[detector_name]
-            constants = parse_detector_constants(main_xml, detector_name)
+            constants = parse_detector_constants(main_xml, detector_name, detector_xml_file=xml_file)
             geometry_info = get_geometry_info(xml_file, detector_config, constants=constants)
             
             # Define thresholds to analyze
