@@ -2,6 +2,7 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17518429.svg)](https://doi.org/10.5281/zenodo.17518429)
 
+
 Companion codebase for the paper **Beam-Beam Backgrounds for the Cool Copper Collider** by Dimitrios Ntounis, Caterina Vernieri, Lindsey Gray, Elias Mettner, Tim Barklow, Laith Gordon, and Emilio A. Nanni.  
 External links: [arXiv](https://arxiv.org/abs/2511.01075) | [Journal submission (pending)](https://doi.org/placeholder)
 
