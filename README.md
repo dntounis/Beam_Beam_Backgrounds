@@ -31,13 +31,13 @@ pip install scipy mplhep
 
 ## Included Tools
 
-- `timing_studies/timing_all_BX_Aug2025.py`
+- `timing_studies/timing_all_BX.py`
   - Multi–bunch-crossing timing histogrammer with IPC/HPP separation, rate extraction, and tracker-layer visualisations.
-- `timing_studies/timing_one_BX_Aug2025.py`
+- `timing_studies/timing_one_BX.py`
   - Per-BX timing analysis that overlays IPC and HPP backgrounds, supports branch-specific plotting windows, and normalises counts per bunch crossing.
-- `timing_studies/hit_rates_plot_Aug2025.py`
+- `timing_studies/hit_rates_plot.py`
   - Generates the combined-background hit-rate figures and writes sensitive-area metadata to JSON.
-- `timing_studies/hit_rates_plot_Aug2025_separate_IPC_HPP.py`
+- `timing_studies/hit_rates_plot_separate_IPC_HPP.py`
   - Extends the hit-rate workflow with individual IPC and HPP plots and tabulated summaries.
 - `timing_studies/hit_plotting.ipynb`
   - Notebook interface mirroring the script APIs for exploratory visualisation (IPC-only or IPC+HPP).
@@ -54,7 +54,7 @@ pip install scipy mplhep
 
 ---
 
-## Multi-Bunch Crossing Analysis (`timing_all_BX_Aug2025.py`)
+## Multi-Bunch Crossing Analysis (`timing_all_BX.py`)
 
 ### Key Features
 
@@ -93,7 +93,7 @@ pip install scipy mplhep
 
 ---
 
-## Single-Bunch Crossing Analysis (`timing_one_BX_Aug2025.py`)
+## Single-Bunch Crossing Analysis (`timing_one_BX.py`)
 
 ### Key Features
 
@@ -132,13 +132,13 @@ pip install scipy mplhep
 
 ## Hit-Rate Summary Plots
 
-### `hit_rates_plot_Aug2025.py`
+### `hit_rates_plot.py`
 
 - Recreates barrel and endcap hit-rate figures using geometry-derived sensitive areas.
 - Writes area metadata (mm², cm², detector labels, assumptions) to JSON unless `--skip-area-density` is supplied.
 - Produces both absolute hit-rate and surface-density (hits/(ns·cm²)) figures.
 
-### `hit_rates_plot_Aug2025_separate_IPC_HPP.py`
+### `hit_rates_plot_separate_IPC_HPP.py`
 
 - Extends the base workflow with dedicated IPC and HPP plots and tabulated CSV/JSON summaries in the output directory.
 - Supports the same geometry reconstruction pipeline and plotting controls as the combined script.
@@ -181,7 +181,7 @@ pip install scipy mplhep
 
 ```bash
 # Multi-BX timing with HPP overlay and tracker overlay plots
-python timing_studies/timing_all_BX_Aug2025.py \
+python timing_studies/timing_all_BX.py \
   --base-dir /data/ipc \
   --pattern "ddsim_C3_250_PS1_v2_seed_*.edm4hep.root" \
   --hpp-file /data/hpp/hpp_background.edm4hep.root \
@@ -193,7 +193,7 @@ python timing_studies/timing_all_BX_Aug2025.py \
   --outdir outputs/timing_all
 
 # Per-BX timing with reduced ECAL time window and log-scale plots
-python timing_studies/timing_one_BX_Aug2025.py \
+python timing_studies/timing_one_BX.py \
   --base-dir /data/ipc \
   --hpp-file /data/hpp/hpp_background.edm4hep.root \
   --hpp-mu 1.8 \
@@ -203,13 +203,13 @@ python timing_studies/timing_one_BX_Aug2025.py \
   --outdir outputs/timing_one
 
 # Hit-rate figures with area-density outputs
-python timing_studies/hit_rates_plot_Aug2025.py \
+python timing_studies/hit_rates_plot.py \
   --outdir outputs/hit_rates \
   --formats png pdf \
   --area-report outputs/hit_rates/detector_areas.json
 
 # Split IPC/HPP hit-rate figures without mplhep styling
-python timing_studies/hit_rates_plot_Aug2025_separate_IPC_HPP.py \
+python timing_studies/hit_rates_plot_separate_IPC_HPP.py \
   --outdir outputs/hit_rates_split \
   --formats png pdf \
   --no-mplhep
@@ -219,7 +219,7 @@ for scenario in C3_250_PS1 C3_250_PS2 C3_550_PS1 C3_550_PS2; do
   base="/data/GuineaPig_runs/${scenario}/ddsim"
   hpp="/data/hpp/${scenario}/gg_had_MERGED.edm4hep.root"
   tag="$(echo ${scenario} | tr '[:upper:]' '[:lower:]')"
-  python timing_studies/timing_one_BX_Aug2025.py \
+  python timing_studies/timing_one_BX.py \
     --base-dir "${base}" \
     --pattern "ddsim_${scenario}_v2_seed_*" \
     --max-files 1800 \
@@ -259,7 +259,7 @@ done
 while read -r scenario spacing maxfiles ratecap; do
   base="/data/GuineaPig_runs/${scenario}/ddsim"
   hpp="/data/hpp/${scenario}/gg_had_MERGED.edm4hep.root"
-  python timing_studies/timing_all_BX_Aug2025.py \
+  python timing_studies/timing_all_BX.py \
     --base-dir "${base}" \
     --pattern "ddsim_${scenario}_v2_seed_*" \
     --bunch-spacing "${spacing}" \
